@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [int]$LookbackHours = 24,
+    # Used only on first run (no state file yet). Bookmarks take over afterwards.
+    [int]$LookbackHours = 168,
     [string]$OutputPath = 'C:\ProgramData\ActivityMonitor\events.jsonl',
     [bool]$EnableAuditPolicy = $true,
     # Optional server push. If set, new events are POSTed after local write.
@@ -280,7 +281,6 @@ $snapshot = [pscustomobject]@{
 }
 
 $snapshotJson = $snapshot | ConvertTo-Json -Depth 6
-Write-Output $snapshotJson
 
 if ($allEvents.Count -gt 0) {
     foreach ($ev in $allEvents) {
@@ -310,12 +310,8 @@ if ($ServerUrl -and $allEvents.Count -gt 0) {
 $lastSnapshotPath = Join-Path $outputDir 'last-snapshot.json'
 Set-Content -Path $lastSnapshotPath -Value $snapshotJson -Encoding UTF8
 
-Write-Host ""
-Write-Host "---"
-Write-Host "Wrote JSONL line to: $OutputPath"
-Write-Host "Wrote full snapshot to: $lastSnapshotPath"
-Write-Host "Event counts by source:"
-$allEvents | Group-Object source | Select-Object Name,Count | Format-Table -AutoSize
+$pushInfo = if ($ServerUrl) { "push=$ServerUrl" } else { "push=disabled" }
+Write-Output ("events={0}  securityLogAccess={1}  {2}" -f $allEvents.Count, $securityAccessible, $pushInfo)
 
 $newState = [pscustomobject]@{
     lastRunUtc = (Get-Date).ToUniversalTime().ToString('o')

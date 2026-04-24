@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    # Accepts either a single .jsonl file or a directory containing one .jsonl per machine
+    # Either pull from a central server OR from local .jsonl file/directory
+    [string]$ServerUrl,
+    [string]$ApiKey,
     [string]$EventsPath  = 'C:\ProgramData\ActivityMonitor\events.jsonl',
     [string]$OutputDir   = 'C:\ProgramData\ActivityMonitor\report',
     [datetime]$From      = (Get-Date).AddDays(-14).Date,
@@ -8,19 +10,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not (Test-Path $EventsPath)) { throw "Events path not found: $EventsPath" }
 if (-not (Test-Path $OutputDir))  { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
-# --- Load from one file or a directory of files ------------------------
-$inputFiles = if ((Get-Item $EventsPath).PSIsContainer) {
-    Get-ChildItem $EventsPath -Filter '*.jsonl' -File | ForEach-Object { $_.FullName }
-} else { @($EventsPath) }
-Write-Host "Reading $($inputFiles.Count) event file(s):"
-$inputFiles | ForEach-Object { Write-Host "  $_" }
-
-$raw = foreach ($f in $inputFiles) { Get-Content $f -Encoding UTF8 | Where-Object { $_ -match '\S' } }
-$events = foreach ($line in $raw) {
-    try { $line | ConvertFrom-Json } catch { }
+# --- Load events: from server if ServerUrl given, else local files -----
+if ($ServerUrl) {
+    $uri = ($ServerUrl.TrimEnd('/')) + '/v1/events?from=' + $From.ToString('o') + '&to=' + $To.ToString('o')
+    Write-Host "Fetching events from: $uri"
+    $headers = @{}
+    if ($ApiKey) { $headers['X-API-Key'] = $ApiKey }
+    $events = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 30
+} else {
+    if (-not (Test-Path $EventsPath)) { throw "Events path not found: $EventsPath" }
+    $inputFiles = if ((Get-Item $EventsPath).PSIsContainer) {
+        Get-ChildItem $EventsPath -Filter '*.jsonl' -File | ForEach-Object { $_.FullName }
+    } else { @($EventsPath) }
+    Write-Host "Reading $($inputFiles.Count) event file(s):"
+    $inputFiles | ForEach-Object { Write-Host "  $_" }
+    $raw = foreach ($f in $inputFiles) { Get-Content $f -Encoding UTF8 | Where-Object { $_ -match '\S' } }
+    $events = foreach ($line in $raw) {
+        try { $line | ConvertFrom-Json } catch { }
+    }
 }
 $events = $events | ForEach-Object {
     $t = $_.timestamp

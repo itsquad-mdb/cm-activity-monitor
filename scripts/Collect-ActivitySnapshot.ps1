@@ -266,7 +266,7 @@ foreach ($s in (Get-SessionSnapshot)) {
     }
 }
 
-$allEvents = $allEvents | Sort-Object timestamp
+$allEvents = @($allEvents | Sort-Object timestamp)
 
 $snapshot = [pscustomobject]@{
     collectedAt        = (Get-Date).ToString('o')

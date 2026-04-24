@@ -22,6 +22,13 @@ def db():
     return conn
 
 
+def normalize_user(name):
+    if name is None:
+        return None
+    s = str(name).strip()
+    return s.lower() if s else None
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with closing(db()) as conn:
@@ -45,6 +52,11 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_events_computer ON events(computer);
             CREATE INDEX IF NOT EXISTS idx_events_user ON events(user);
             """
+        )
+        # Backfill: normalise any legacy user values to lowercase
+        conn.execute(
+            "UPDATE events SET user = LOWER(TRIM(user)) "
+            "WHERE user IS NOT NULL AND user != LOWER(TRIM(user))"
         )
         conn.commit()
 
@@ -122,7 +134,7 @@ def ingest(batch: EventBatch, x_api_key: Optional[str] = Header(None)):
                         e.source,
                         e.eventId,
                         e.eventType,
-                        e.user,
+                        normalize_user(e.user),
                         e.logonType,
                         e.idleSeconds,
                         json.dumps(extra) if extra else None,
@@ -153,7 +165,7 @@ def query_events(
     args: list = [frm, to]
     if user:
         sql += " AND user = ?"
-        args.append(user)
+        args.append(normalize_user(user))
     if computer:
         sql += " AND computer = ?"
         args.append(computer)

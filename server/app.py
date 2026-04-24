@@ -2,10 +2,14 @@ import json
 import logging
 import os
 import sqlite3
+from collections import defaultdict
 from contextlib import asynccontextmanager, closing
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 DB_PATH = os.environ.get("DB_PATH", "/data/activity.db")
@@ -69,6 +73,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Activity Monitor", version="0.1.0", lifespan=lifespan)
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 
 class Event(BaseModel):
@@ -195,3 +200,132 @@ def list_users(x_api_key: Optional[str] = Header(None)):
             "FROM events WHERE user IS NOT NULL GROUP BY user ORDER BY lastSeen DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+ARRIVAL_TYPES = {"Logon", "Unlock", "Resume", "Heartbeat"}
+DEPART_TYPES = {"Logoff", "Lock", "Sleep"}
+PRESENCE_TYPES = ARRIVAL_TYPES | DEPART_TYPES
+
+
+def _parse_iso(s):
+    # Accept trailing Z
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s)
+
+
+def _local_date(dt):
+    # Keep the day-boundary based on the event's own offset (UK/local timezone)
+    return dt.date().isoformat()
+
+
+@app.get("/v1/summary")
+def get_summary(
+    frm: str = Query(alias="from"),
+    to: str = Query(...),
+    x_api_key: Optional[str] = Header(None),
+):
+    """Per-user-per-day rollup: firstArrival, lastActivity, span, locked, active, machines."""
+    check_auth(x_api_key)
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT ts, computer, event_type, user FROM events "
+            "WHERE ts >= ? AND ts <= ? AND user IS NOT NULL "
+            "AND event_type IN ('Logon','Logoff','Lock','Unlock','Sleep','Resume','Heartbeat') "
+            "ORDER BY ts",
+            (frm, to),
+        ).fetchall()
+
+    buckets = defaultdict(list)  # (user, date) -> list of (dt, event_type, computer)
+    for r in rows:
+        try:
+            dt = _parse_iso(r["ts"])
+        except Exception:
+            continue
+        key = (r["user"], _local_date(dt))
+        buckets[key].append((dt, r["event_type"], r["computer"]))
+
+    results = []
+    for (user, date), dayev in buckets.items():
+        dayev.sort(key=lambda x: x[0])
+        arrivals = [x for x in dayev if x[1] in ARRIVAL_TYPES]
+        first_arrival = arrivals[0][0] if arrivals else None
+        last_activity = dayev[-1][0] if dayev else None
+
+        # Lock-span accounting: walk events, pair Lock/Sleep -> Unlock/Resume/Logon
+        locked_min = 0.0
+        lock_start = None
+        for dt, et, _ in dayev:
+            if et in ("Lock", "Sleep") and lock_start is None:
+                lock_start = dt
+            elif et in ("Unlock", "Resume", "Logon") and lock_start:
+                locked_min += (dt - lock_start).total_seconds() / 60.0
+                lock_start = None
+
+        span_min = 0.0
+        if first_arrival and last_activity:
+            span_min = (last_activity - first_arrival).total_seconds() / 60.0
+        active_min = max(0.0, span_min - locked_min)
+
+        machines = sorted({x[2] for x in dayev if x[2]})
+        results.append({
+            "user": user,
+            "date": date,
+            "firstArrival": first_arrival.strftime("%H:%M:%S") if first_arrival else None,
+            "lastActivity": last_activity.strftime("%H:%M:%S") if last_activity else None,
+            "spanMinutes": int(span_min),
+            "lockedMinutes": int(locked_min),
+            "activeMinutes": int(active_min),
+            "machines": machines,
+            "eventCount": len(dayev),
+        })
+    results.sort(key=lambda r: (r["user"], r["date"]))
+    return results
+
+
+@app.get("/v1/status")
+def get_status(x_api_key: Optional[str] = Header(None)):
+    """Current presence state per user, based on most-recent event."""
+    check_auth(x_api_key)
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT user, ts, event_type, computer, idle_seconds FROM events e1 "
+            "WHERE user IS NOT NULL AND ts = ("
+            "  SELECT MAX(ts) FROM events e2 WHERE e2.user = e1.user"
+            ") ORDER BY user"
+        ).fetchall()
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for r in rows:
+        try:
+            last_dt = _parse_iso(r["ts"])
+        except Exception:
+            continue
+        age_min = (now - last_dt.astimezone(timezone.utc)).total_seconds() / 60.0
+        et = r["event_type"]
+        if et in ("Lock", "Sleep"):
+            state = "locked"
+        elif et in ("Logoff",):
+            state = "offline"
+        elif age_min > 15:
+            state = "stale"  # no heartbeat in 15 min
+        elif et == "Heartbeat":
+            state = "active" if (r["idle_seconds"] or 0) < 60 else "idle"
+        else:
+            state = "active"
+        out.append({
+            "user": r["user"],
+            "lastEvent": et,
+            "lastEventAt": r["ts"],
+            "lastComputer": r["computer"],
+            "idleSeconds": r["idle_seconds"],
+            "ageMinutes": round(age_min, 1),
+            "state": state,
+        })
+    return out
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})

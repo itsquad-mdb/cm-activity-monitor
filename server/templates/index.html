@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Activity Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .dot { width: .6rem; height: .6rem; border-radius: 9999px; display: inline-block; margin-right: .4rem; }
+    .bar { height: .35rem; background: #e5e7eb; border-radius: 9999px; overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: #3b82f6; }
+    .pill { display:inline-flex; align-items:center; padding:.1rem .5rem; border-radius:9999px; font-size:.75rem; font-weight:500; }
+    details > summary { list-style: none; cursor: pointer; }
+    details > summary::-webkit-details-marker { display: none; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+
+<div class="max-w-6xl mx-auto px-6 py-8">
+
+  <!-- Header -->
+  <header class="flex flex-wrap items-end justify-between gap-4 mb-8">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight">Activity Monitor</h1>
+      <p class="text-sm text-slate-500" id="generated-at">&nbsp;</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-sm text-slate-600">Range</label>
+      <select id="range" class="bg-white border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="1">Today</option>
+        <option value="7">Last 7 days</option>
+        <option value="14" selected>Last 14 days</option>
+        <option value="30">Last 30 days</option>
+      </select>
+      <button id="refresh" class="bg-slate-900 text-white rounded-md px-3 py-1.5 text-sm hover:bg-slate-700">Refresh</button>
+    </div>
+  </header>
+
+  <!-- Now panel -->
+  <section class="mb-10">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Now</h2>
+    <div id="now-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div class="text-slate-400 text-sm">Loading&hellip;</div>
+    </div>
+  </section>
+
+  <!-- Summary table -->
+  <section>
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Activity</h2>
+    <div class="bg-white rounded-lg shadow-sm ring-1 ring-slate-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
+          <tr>
+            <th class="text-left px-4 py-3">User</th>
+            <th class="text-left px-4 py-3">Date</th>
+            <th class="text-left px-4 py-3">Day</th>
+            <th class="text-right px-4 py-3">First</th>
+            <th class="text-right px-4 py-3">Last</th>
+            <th class="text-right px-4 py-3">Locked</th>
+            <th class="text-right px-4 py-3">Active</th>
+            <th class="text-left px-4 py-3 w-40"></th>
+            <th class="text-left px-4 py-3">Machines</th>
+          </tr>
+        </thead>
+        <tbody id="summary-body" class="divide-y divide-slate-100">
+          <tr><td colspan="9" class="px-4 py-6 text-slate-400 text-center">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-slate-400 mt-3">Click a row to see the event timeline for that user on that day.</p>
+  </section>
+</div>
+
+<script>
+const fmtMin = (m) => {
+  if (!m) return "0m";
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h === 0) return r + "m";
+  if (r === 0) return h + "h";
+  return h + "h " + r + "m";
+};
+const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+const stateStyle = {
+  active:  { dot:"#10b981", text:"Active",   cls:"bg-emerald-50 text-emerald-700" },
+  idle:    { dot:"#f59e0b", text:"Idle",     cls:"bg-amber-50 text-amber-700" },
+  locked:  { dot:"#64748b", text:"Locked",   cls:"bg-slate-100 text-slate-700" },
+  offline: { dot:"#94a3b8", text:"Offline",  cls:"bg-slate-50 text-slate-500" },
+  stale:   { dot:"#94a3b8", text:"No signal",cls:"bg-slate-50 text-slate-500" }
+};
+
+function rangeDays() { return parseInt(document.getElementById("range").value, 10); }
+function isoRange() {
+  const days = rangeDays();
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - (days - 1));
+  from.setHours(0,0,0,0);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+async function loadNow() {
+  const r = await fetch("/v1/status");
+  const data = await r.json();
+  const grid = document.getElementById("now-grid");
+  if (!data.length) {
+    grid.innerHTML = '<div class="text-slate-400 text-sm">No reporting users yet.</div>';
+    return;
+  }
+  grid.innerHTML = data.map(u => {
+    const s = stateStyle[u.state] || stateStyle.stale;
+    const idle = u.idleSeconds == null ? "—" : (u.idleSeconds < 60 ? Math.round(u.idleSeconds) + "s" : Math.round(u.idleSeconds/60) + "m");
+    const ageMin = u.ageMinutes == null ? "—" : (u.ageMinutes < 1 ? "just now" : Math.round(u.ageMinutes) + "m ago");
+    return `
+      <div class="bg-white rounded-lg shadow-sm ring-1 ring-slate-200 p-4">
+        <div class="flex items-center justify-between">
+          <div class="font-medium">${escapeHtml(u.user)}</div>
+          <span class="pill ${s.cls}"><span class="dot" style="background:${s.dot}"></span>${s.text}</span>
+        </div>
+        <dl class="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <div><dt class="text-slate-400">Idle</dt><dd class="tabular">${idle}</dd></div>
+          <div><dt class="text-slate-400">Last signal</dt><dd class="tabular">${ageMin}</dd></div>
+          <div><dt class="text-slate-400">Machine</dt><dd class="truncate" title="${escapeHtml(u.lastComputer||'')}">${escapeHtml(u.lastComputer||'—')}</dd></div>
+        </dl>
+      </div>`;
+  }).join("");
+}
+
+async function loadSummary() {
+  const { from, to } = isoRange();
+  const r = await fetch(`/v1/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  const rows = await r.json();
+  const body = document.getElementById("summary-body");
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-slate-400 text-center">No activity in this range.</td></tr>';
+    return;
+  }
+  const maxActive = Math.max(1, ...rows.map(r => r.activeMinutes || 0));
+  body.innerHTML = rows.map(r => {
+    const dayIdx = new Date(r.date + "T00:00:00").getDay();
+    const pct = Math.round(100 * (r.activeMinutes||0) / maxActive);
+    const weekendCls = (dayIdx === 0 || dayIdx === 6) ? "text-slate-400" : "";
+    return `
+      <tr class="hover:bg-slate-50 cursor-pointer ${weekendCls}" data-user="${escapeAttr(r.user)}" data-date="${r.date}">
+        <td class="px-4 py-2.5 font-medium">${escapeHtml(r.user)}</td>
+        <td class="px-4 py-2.5 tabular">${r.date}</td>
+        <td class="px-4 py-2.5">${DOW[dayIdx]}</td>
+        <td class="px-4 py-2.5 text-right tabular">${r.firstArrival ?? "—"}</td>
+        <td class="px-4 py-2.5 text-right tabular">${r.lastActivity ?? "—"}</td>
+        <td class="px-4 py-2.5 text-right tabular">${fmtMin(r.lockedMinutes)}</td>
+        <td class="px-4 py-2.5 text-right tabular font-medium">${fmtMin(r.activeMinutes)}</td>
+        <td class="px-4 py-2.5"><div class="bar"><span style="width:${pct}%"></span></div></td>
+        <td class="px-4 py-2.5 text-slate-500 text-xs">${escapeHtml((r.machines||[]).join(", "))}</td>
+      </tr>`;
+  }).join("");
+  // Row click -> drill-in
+  body.querySelectorAll("tr[data-user]").forEach(tr => {
+    tr.addEventListener("click", () => showTimeline(tr.dataset.user, tr.dataset.date));
+  });
+  document.getElementById("generated-at").textContent =
+    "Generated " + new Date().toLocaleString(undefined, { dateStyle:"medium", timeStyle:"short" });
+}
+
+async function showTimeline(user, date) {
+  const from = date + "T00:00:00";
+  const to   = date + "T23:59:59";
+  const r = await fetch(`/v1/events?from=${from}&to=${to}&user=${encodeURIComponent(user)}`);
+  const events = await r.json();
+  const lines = events.map(e => {
+    const t = e.timestamp.split("T")[1].slice(0,8);
+    return `${t}  ${e.eventType.padEnd(10)}  ${e.computer}`;
+  }).join("\n");
+  alert(`${user}  —  ${date}\n\n${lines || "(no events)"}`);
+}
+
+function escapeHtml(s) { return (s??"").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function escapeAttr(s) { return escapeHtml(s); }
+
+async function refresh() { await Promise.all([loadNow(), loadSummary()]); }
+document.getElementById("refresh").addEventListener("click", refresh);
+document.getElementById("range").addEventListener("change", loadSummary);
+refresh();
+setInterval(loadNow, 60_000);  // refresh "Now" every minute
+</script>
+</body>
+</html>

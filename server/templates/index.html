@@ -5,204 +5,655 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Activity Monitor</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    html { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    html, body { font-family: Inter, system-ui, sans-serif; background: #fbf8f2; color: #2b2018; }
+    .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
     .tabular { font-variant-numeric: tabular-nums; }
-    .dot { width: .6rem; height: .6rem; border-radius: 9999px; display: inline-block; margin-right: .4rem; }
-    .bar { height: .35rem; background: #e5e7eb; border-radius: 9999px; overflow: hidden; }
-    .bar > span { display: block; height: 100%; background: #3b82f6; }
-    .pill { display:inline-flex; align-items:center; padding:.1rem .5rem; border-radius:9999px; font-size:.75rem; font-weight:500; }
-    details > summary { list-style: none; cursor: pointer; }
-    details > summary::-webkit-details-marker { display: none; }
+    .dot { width: .55rem; height: .55rem; border-radius: 9999px; display: inline-block; }
+    .kicker { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #8a7a65; }
+    /* status palette (warm neutrals) */
+    .bg-active   { background: #5aa874; }
+    .bg-idle     { background: #d6a84b; }
+    .bg-lunch    { background: #c97a3a; }
+    .bg-locked   { background: #a89983; }
+    .bg-offline  { background: #9a8f7f; }
+    .bg-stale    { background: #b5aa98; }
+    .tx-active   { color: #3f7a54; }
+    .tx-idle     { color: #8b6b20; }
+    .tx-lunch    { color: #8a4a1f; }
+    .tx-locked   { color: #6b5f50; }
+    .tx-offline  { color: #625747; }
+    @keyframes pulse-ring {
+      0%   { transform: scale(1);   opacity: .45; }
+      100% { transform: scale(2.6); opacity: 0;   }
+    }
+    .pulse::after {
+      content: ""; position: absolute; inset: 0; border-radius: 9999px;
+      background: inherit; animation: pulse-ring 1.8s ease-out infinite;
+    }
+    .pulse { position: relative; }
+    /* inline day bar */
+    .daybar { position: relative; height: 8px; background: #ede6d7; border-radius: 3px; overflow: hidden; }
+    .daybar > span { position: absolute; top: 0; bottom: 0; }
+    .daybar .now { width: 1.5px; background: #2b2018; top: -2px; bottom: -2px; }
+    /* big day timeline (detail view) */
+    .big-timeline { position: relative; height: 56px; background: #f5efe1; border: 1px solid #e7dfcd; border-radius: 10px; overflow: hidden; }
+    .big-timeline .seg { position: absolute; top: 8px; bottom: 8px; border-radius: 4px; display: flex; align-items: center; padding: 0 8px; font-size: 10px; font-weight: 600; color: #2b2018; letter-spacing: .06em; text-transform: uppercase; overflow: hidden; white-space: nowrap; }
+    .big-timeline .grid { position: absolute; top: 0; bottom: 0; width: 1px; background: #ece4d2; }
+    .big-timeline .now  { position: absolute; top: -4px; bottom: -4px; width: 2px; background: #2b2018; box-shadow: 0 0 0 3px rgba(43,32,24,.12); }
+    .big-timeline .now .tip { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600; background: white; padding: 1px 5px; border-radius: 3px; border: 1px solid #e1d8c2; white-space: nowrap; }
+    .ax { display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #8a7a65; margin-top: 6px; }
+    .pill { display:inline-flex; align-items:center; gap:.25rem; padding:.1rem .5rem; border-radius:9999px; font-size:.7rem; font-weight:500; background: #f0e9d7; color: #5a4a35; }
+    .row { cursor: pointer; transition: background .15s; }
+    .row:hover { background: #f5efe1; }
+    .row.selected { background: #efe7d2; }
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #d9cfb8; border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body>
 
-<div class="max-w-6xl mx-auto px-6 py-8">
+<!-- =============== ROSTER VIEW (design A) =============== -->
+<div id="view-roster" class="max-w-[1400px] mx-auto px-8 py-6">
 
-  <!-- Header -->
-  <header class="flex flex-wrap items-end justify-between gap-4 mb-8">
+  <header class="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-[#eadfc8]">
     <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Activity Monitor</h1>
-      <p class="text-sm text-slate-500" id="generated-at">&nbsp;</p>
+      <div class="kicker" id="today-kicker">&nbsp;</div>
+      <h1 class="text-2xl font-semibold tracking-tight mt-1">Team activity</h1>
     </div>
-    <div class="flex items-center gap-2">
-      <label class="text-sm text-slate-600">Range</label>
-      <select id="range" class="bg-white border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <option value="1">Today</option>
-        <option value="7">Last 7 days</option>
-        <option value="14" selected>Last 14 days</option>
-        <option value="30">Last 30 days</option>
-      </select>
-      <button id="refresh" class="bg-slate-900 text-white rounded-md px-3 py-1.5 text-sm hover:bg-slate-700">Refresh</button>
+    <div class="flex items-center gap-6">
+      <div class="flex items-center gap-1.5"><span class="dot bg-active"></span><span class="mono text-lg font-semibold" id="stat-online">–</span><span class="text-xs text-[#8a7a65]">online</span></div>
+      <div class="flex items-center gap-1.5"><span class="dot bg-lunch"></span><span class="mono text-lg font-semibold" id="stat-lunch">–</span><span class="text-xs text-[#8a7a65]">locked</span></div>
+      <div class="flex items-center gap-1.5"><span class="dot bg-idle"></span><span class="mono text-lg font-semibold" id="stat-away">–</span><span class="text-xs text-[#8a7a65]">idle</span></div>
+      <div class="flex items-center gap-1.5"><span class="dot bg-offline"></span><span class="mono text-lg font-semibold" id="stat-offline">–</span><span class="text-xs text-[#8a7a65]">offline</span></div>
+      <div class="pl-5 border-l border-[#eadfc8] flex items-center gap-2">
+        <span class="mono text-sm" id="live-clock">--:--:--</span>
+        <span class="text-[10px] text-[#8a7a65] tracking-wider">LIVE</span>
+        <button id="btn-refresh" class="ml-2 text-xs bg-[#2b2018] text-[#fbf8f2] px-2.5 py-1 rounded-md hover:bg-[#47372a]">Refresh</button>
+      </div>
     </div>
   </header>
 
-  <!-- Now panel -->
-  <section class="mb-10">
-    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Now</h2>
-    <div id="now-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      <div class="text-slate-400 text-sm">Loading&hellip;</div>
+  <!-- Toolbar -->
+  <div class="flex items-center justify-between py-2.5 border-b border-[#f0e8d4] text-xs">
+    <div class="flex gap-1" id="filter-tabs">
+      <button data-filter="all"     class="filter-btn px-2.5 py-1 rounded-md font-semibold bg-[#efe7d2]">all</button>
+      <button data-filter="online"  class="filter-btn px-2.5 py-1 rounded-md text-[#8a7a65] hover:text-[#2b2018]">online</button>
+      <button data-filter="away"    class="filter-btn px-2.5 py-1 rounded-md text-[#8a7a65] hover:text-[#2b2018]">away</button>
+      <button data-filter="offline" class="filter-btn px-2.5 py-1 rounded-md text-[#8a7a65] hover:text-[#2b2018]">offline</button>
     </div>
-  </section>
+    <div class="flex items-center gap-3 text-[#8a7a65]">
+      <span>Sort by</span>
+      <select id="sort-by" class="bg-white border border-[#e7dfcd] rounded-md px-2 py-1 text-xs text-[#2b2018]">
+        <option value="status">Status</option>
+        <option value="checkin">Check-in</option>
+        <option value="hours">Hours today</option>
+        <option value="name">Name</option>
+      </select>
+    </div>
+  </div>
 
-  <!-- Summary table -->
-  <section>
-    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Activity</h2>
-    <div class="bg-white rounded-lg shadow-sm ring-1 ring-slate-200 overflow-hidden">
-      <table class="w-full text-sm">
-        <thead class="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
-          <tr>
-            <th class="text-left px-4 py-3">User</th>
-            <th class="text-left px-4 py-3">Date</th>
-            <th class="text-left px-4 py-3">Day</th>
-            <th class="text-right px-4 py-3">First</th>
-            <th class="text-right px-4 py-3">Last</th>
-            <th class="text-right px-4 py-3">Locked</th>
-            <th class="text-right px-4 py-3">Active</th>
-            <th class="text-left px-4 py-3 w-40"></th>
-            <th class="text-left px-4 py-3">Machines</th>
-          </tr>
-        </thead>
-        <tbody id="summary-body" class="divide-y divide-slate-100">
-          <tr><td colspan="9" class="px-4 py-6 text-slate-400 text-center">Loading&hellip;</td></tr>
-        </tbody>
-      </table>
+  <!-- Column headers -->
+  <div class="grid gap-4 text-[10px] font-semibold uppercase tracking-wider text-[#8a7a65] px-1 pt-3 pb-2 border-b border-[#f0e8d4]" style="grid-template-columns: 240px 100px 90px 80px 1fr 90px 90px;">
+    <div>Member</div><div>Status</div><div>Check-in</div><div>Idle</div><div>Day · 08 → 18:30</div><div class="text-right">Today</div><div class="text-right">Week</div>
+  </div>
+
+  <!-- Rows -->
+  <div id="roster-body"><div class="text-sm text-[#8a7a65] py-8 text-center">Loading&hellip;</div></div>
+
+  <!-- Footer legend -->
+  <div class="mt-4 pt-3 flex items-center gap-5 text-xs text-[#8a7a65] border-t border-[#f0e8d4]">
+    <span class="flex items-center gap-1.5"><span class="dot bg-active"></span>Active</span>
+    <span class="flex items-center gap-1.5"><span class="dot bg-idle"></span>Idle</span>
+    <span class="flex items-center gap-1.5"><span class="dot bg-lunch"></span>Locked (lunch / away)</span>
+    <div class="flex-1"></div>
+    <span class="mono">Avg active today · <span id="stat-avg-active">—</span></span>
+    <span>Click any row → open day timeline</span>
+  </div>
+</div>
+
+<!-- =============== DETAIL VIEW (design D) =============== -->
+<div id="view-detail" class="hidden h-screen" style="display:none">
+  <div class="grid h-full" style="grid-template-columns: 240px 1fr">
+    <!-- Sidebar -->
+    <aside class="border-r border-[#eadfc8] bg-[#f7f1e2] p-3 overflow-auto">
+      <div class="kicker px-2 pb-2">Team</div>
+      <div id="sidebar-members"></div>
+    </aside>
+    <!-- Main -->
+    <div class="flex flex-col overflow-hidden">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-8 py-5 border-b border-[#eadfc8]">
+        <div class="flex items-center gap-3.5">
+          <button id="btn-back" title="Back to team roster"
+            class="w-8 h-8 rounded-md border border-[#e1d8c2] bg-white flex items-center justify-center text-[#47372a] hover:bg-[#f5efe1]">←</button>
+          <div id="detail-avatar"></div>
+          <div>
+            <div id="detail-name" class="text-xl font-semibold tracking-tight">—</div>
+            <div id="detail-sub" class="text-xs text-[#8a7a65] mt-0.5 flex items-center gap-2"></div>
+          </div>
+        </div>
+        <div class="flex gap-8">
+          <div><div class="kicker">Check in</div><div class="mono text-base font-semibold mt-1" id="kpi-in">—</div></div>
+          <div><div class="kicker">Check out</div><div class="mono text-base font-semibold mt-1" id="kpi-out">—</div></div>
+          <div><div class="kicker">Active today</div><div class="mono text-base font-semibold mt-1" id="kpi-today">—</div></div>
+          <div><div class="kicker">This week</div><div class="mono text-base font-semibold mt-1" id="kpi-week">—</div></div>
+        </div>
+      </div>
+      <!-- Day timeline -->
+      <div class="px-8 pt-6 pb-5 border-b border-[#f0e8d4]">
+        <div class="flex items-baseline justify-between mb-3">
+          <div>
+            <div class="kicker">Today</div>
+            <div class="text-sm font-medium mt-0.5">Day timeline</div>
+          </div>
+          <div class="flex gap-4 text-xs text-[#8a7a65]">
+            <span class="flex items-center gap-1.5"><span class="dot bg-active"></span>Active</span>
+            <span class="flex items-center gap-1.5"><span class="dot bg-idle"></span>Idle</span>
+            <span class="flex items-center gap-1.5"><span class="dot bg-lunch"></span>Locked</span>
+            <span class="flex items-center gap-1.5"><span class="dot" style="background:#2b2018"></span>Now</span>
+          </div>
+        </div>
+        <div class="big-timeline" id="big-timeline"></div>
+        <div class="ax" id="timeline-axis"></div>
+      </div>
+      <!-- Events + week -->
+      <div class="grid flex-1 overflow-hidden" style="grid-template-columns: 1fr 340px">
+        <div class="px-8 py-5 overflow-auto">
+          <div class="kicker mb-2">Event log</div>
+          <div id="event-log"></div>
+        </div>
+        <aside class="border-l border-[#f0e8d4] bg-[#f7f1e2] p-5 overflow-auto">
+          <div class="kicker mb-3">This week</div>
+          <div id="week-spark"></div>
+        </aside>
+      </div>
     </div>
-    <p class="text-xs text-slate-400 mt-3">Click a row to see the event timeline for that user on that day.</p>
-  </section>
+  </div>
 </div>
 
 <script>
+// --- constants + helpers ---------------------------------------------
+const DAY_START_MIN = 8 * 60;       // 08:00
+const DAY_END_MIN   = 18 * 60 + 30; // 18:30
+const IDLE_THRESHOLD_SEC = 5 * 60;  // heartbeat idle > 5 min counts as idle
+
 const fmtMin = (m) => {
-  if (!m) return "0m";
+  if (m == null || m === 0) return "0h 00m";
   const h = Math.floor(m / 60), r = m % 60;
-  if (h === 0) return r + "m";
-  if (r === 0) return h + "h";
-  return h + "h " + r + "m";
+  return h + "h " + String(r).padStart(2, "0") + "m";
 };
+const fmtHM = (mins) => {
+  if (mins == null) return "—";
+  const h = Math.floor(mins / 60), m = Math.floor(mins % 60);
+  return String(h).padStart(2,"0") + ":" + String(m).padStart(2,"0");
+};
+const toMinOfDay = (date) => date.getHours() * 60 + date.getMinutes() + date.getSeconds()/60;
+const iso = (d) => d.toISOString();
+const startOfDay = (d = new Date()) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const endOfDay   = (d = new Date()) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
-const stateStyle = {
-  active:  { dot:"#10b981", text:"Active",   cls:"bg-emerald-50 text-emerald-700" },
-  idle:    { dot:"#f59e0b", text:"Idle",     cls:"bg-amber-50 text-amber-700" },
-  locked:  { dot:"#64748b", text:"Locked",   cls:"bg-slate-100 text-slate-700" },
-  offline: { dot:"#94a3b8", text:"Offline",  cls:"bg-slate-50 text-slate-500" },
-  stale:   { dot:"#94a3b8", text:"No signal",cls:"bg-slate-50 text-slate-500" }
-};
+const escapeHtml = (s) => (s??"").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 
-function rangeDays() { return parseInt(document.getElementById("range").value, 10); }
-function isoRange() {
-  const days = rangeDays();
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - (days - 1));
-  from.setHours(0,0,0,0);
-  return { from: from.toISOString(), to: to.toISOString() };
+function displayOf(u) {
+  if (u.displayName) return u.displayName;
+  if (!u.user) return "—";
+  // Capitalise sam-style names: first.last → First Last
+  return u.user.split(/[._\s-]+/).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+}
+function initialsOf(name) {
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "—";
+  if (parts.length === 1) return parts[0].slice(0,2).toUpperCase();
+  return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+}
+// Stable hue from name → avatar background (warm palette, muted)
+function avatarHue(name) {
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return h;
+}
+function avatarHtml(name, size = 30, ring = null) {
+  const hue = avatarHue(name);
+  const bg = `hsl(${hue} 45% 82%)`;
+  const fg = `hsl(${hue} 45% 25%)`;
+  const ringStyle = ring ? `box-shadow: 0 0 0 2px ${ring};` : "";
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${bg};color:${fg};font-size:${Math.round(size*0.38)}px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;letter-spacing:.02em;${ringStyle}">${initialsOf(name)}</div>`;
+}
+function statusLabel(state) {
+  return { active:"Active", idle:"Idle", locked:"Locked", offline:"Offline", stale:"No signal" }[state] || state;
+}
+function statusCls(state) {
+  return { active:"bg-active", idle:"bg-idle", locked:"bg-lunch", offline:"bg-offline", stale:"bg-stale" }[state] || "bg-stale";
 }
 
-async function loadNow() {
-  const r = await fetch("/v1/status");
-  const data = await r.json();
-  const grid = document.getElementById("now-grid");
-  if (!data.length) {
-    grid.innerHTML = '<div class="text-slate-400 text-sm">No reporting users yet.</div>';
+// --- state -----------------------------------------------------------
+let STATUS = [];          // /v1/status
+let WEEK_SUMMARY = [];    // /v1/summary for last 7 days
+let TODAY_SUMMARY = [];   // /v1/summary filtered to today
+let ROSTER = [];          // derived per-member roster for rendering
+let DETAIL_EVENTS = [];   // events for the currently-open detail day
+let CURRENT_USER = null;  // selected user in detail view
+
+let FILTER = "all";
+let SORT = "status";
+
+// --- segment derivation from events ----------------------------------
+// Walk a day's events and produce {kind, startMin, endMin} segments across
+// active / idle / locked. Emits through to "now" for today.
+function buildSegments(events, dayDate) {
+  const dayStart = startOfDay(dayDate);
+  const todayKey = dayDate.toDateString() === new Date().toDateString();
+  const ceiling = todayKey ? toMinOfDay(new Date()) : DAY_END_MIN;
+
+  // Convert events → {min, type, extra}
+  const items = [];
+  for (const e of events) {
+    if (!e.timestamp) continue;
+    const dt = new Date(e.timestamp);
+    if (dt < dayStart) continue;
+    let extra = {};
+    if (e.extra) { try { extra = JSON.parse(e.extra); } catch {} }
+    items.push({ min: toMinOfDay(dt), type: e.eventType, idle: e.idleSeconds, extra });
+  }
+  items.sort((a,b) => a.min - b.min);
+
+  // Nothing to plot
+  if (items.length === 0) return { segs: [], checkIn: null, checkOut: null };
+
+  // checkIn = first arrival (Logon/Unlock/Resume/Heartbeat)
+  const arrivals = items.filter(i => ["Logon","Unlock","Resume","Heartbeat"].includes(i.type));
+  const checkIn = arrivals.length ? arrivals[0].min : null;
+  // checkOut = last Logoff if present and no later activity
+  let checkOut = null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].type === "Logoff") { checkOut = items[i].min; break; }
+    if (["Heartbeat","Unlock","Resume","Logon"].includes(items[i].type)) break;
+  }
+
+  // Build segments by walking forward. State starts as "active" at checkIn.
+  const segs = [];
+  let cur = checkIn != null ? { kind: "active", start: checkIn } : null;
+
+  const flip = (kind, at) => {
+    if (!cur) { cur = { kind, start: at }; return; }
+    if (cur.kind === kind) return;
+    cur.end = at; segs.push(cur);
+    cur = { kind, start: at };
+  };
+
+  for (const it of items) {
+    if (it.min < (checkIn ?? 0)) continue;
+    if (it.type === "Lock" || it.type === "Sleep") flip("locked", it.min);
+    else if (it.type === "Unlock" || it.type === "Resume" || it.type === "Logon") flip("active", it.min);
+    else if (it.type === "Logoff") { if (cur) { cur.end = it.min; segs.push(cur); cur = null; } }
+    else if (it.type === "Heartbeat") {
+      if (it.extra.sessionLocked === true) flip("locked", it.min);
+      else if ((it.idle || 0) > IDLE_THRESHOLD_SEC) flip("idle", it.min);
+      else flip("active", it.min);
+    }
+  }
+  if (cur) { cur.end = Math.min(ceiling, checkOut ?? ceiling); segs.push(cur); }
+
+  return { segs: segs.filter(s => s.end > s.start), checkIn, checkOut };
+}
+
+// --- data load -------------------------------------------------------
+async function loadRoster() {
+  const now = new Date();
+  const weekStart = new Date(now); weekStart.setDate(weekStart.getDate() - 6); weekStart.setHours(0,0,0,0);
+
+  const [sR, summR] = await Promise.all([
+    fetch("/v1/status").then(r => r.json()),
+    fetch(`/v1/summary?from=${iso(weekStart)}&to=${iso(endOfDay(now))}`).then(r => r.json()),
+  ]);
+  STATUS = sR || [];
+  WEEK_SUMMARY = summR || [];
+
+  // Server groups summary rows by local date (using each event's own tz offset),
+  // so compare in local time — toISOString() is UTC and would skew by a day
+  // whenever the local offset isn't zero.
+  const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const todayIso = localIso(now);
+  TODAY_SUMMARY = WEEK_SUMMARY.filter(s => s.date === todayIso);
+
+  // Join: every user seen this week or currently reporting
+  const users = new Set([
+    ...STATUS.map(s => s.user),
+    ...WEEK_SUMMARY.map(s => s.user),
+  ]);
+
+  ROSTER = [...users].map(u => {
+    const st = STATUS.find(s => s.user === u) || {};
+    const today = TODAY_SUMMARY.find(s => s.user === u);
+    const weekMins = WEEK_SUMMARY.filter(s => s.user === u)
+      .reduce((a, s) => a + (s.activeMinutes || 0), 0);
+    const name = displayOf(st.user ? st : { user: u, displayName: null });
+    const checkInMin = today?.firstArrival ? hmsToMin(today.firstArrival) : null;
+    const state = st.state || "offline";
+    const idleMin = st.idleSeconds != null ? Math.round(st.idleSeconds / 60) : null;
+
+    return {
+      user: u, name, state,
+      lastComputer: st.lastComputer, ageMinutes: st.ageMinutes,
+      idleMin, checkInMin,
+      activeMinutesToday: today?.activeMinutes || 0,
+      activeMinutesWeek: weekMins,
+      lastEvent: st.lastEvent,
+      lastEventAt: st.lastEventAt,
+    };
+  });
+
+  renderRosterHeader(now);
+  renderRoster();
+}
+
+function hmsToMin(hms) {
+  const [h,m,s] = hms.split(":").map(Number);
+  return h * 60 + m + (s || 0) / 60;
+}
+
+function renderRosterHeader(now) {
+  const dow = now.toLocaleDateString(undefined, { weekday: "long" });
+  const dm  = now.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  document.getElementById("today-kicker").textContent = `${dow}, ${dm}`;
+
+  const online  = ROSTER.filter(m => m.state === "active").length;
+  const locked  = ROSTER.filter(m => m.state === "locked").length;
+  const idle    = ROSTER.filter(m => m.state === "idle" || m.state === "stale").length;
+  const offline = ROSTER.filter(m => m.state === "offline").length;
+  document.getElementById("stat-online").textContent  = online;
+  document.getElementById("stat-lunch").textContent   = locked;
+  document.getElementById("stat-away").textContent    = idle;
+  document.getElementById("stat-offline").textContent = offline;
+
+  const activeToday = ROSTER.filter(m => m.activeMinutesToday > 0);
+  const avg = activeToday.length
+    ? Math.round(activeToday.reduce((a,m) => a + m.activeMinutesToday, 0) / activeToday.length)
+    : 0;
+  document.getElementById("stat-avg-active").textContent = fmtMin(avg);
+}
+
+function renderRoster() {
+  let list = ROSTER.slice();
+  if (FILTER === "online")  list = list.filter(m => m.state === "active");
+  if (FILTER === "away")    list = list.filter(m => m.state === "idle" || m.state === "locked" || m.state === "stale");
+  if (FILTER === "offline") list = list.filter(m => m.state === "offline");
+
+  const order = { active:0, idle:1, locked:2, stale:3, offline:4 };
+  list.sort((a,b) => {
+    if (SORT === "status")  return (order[a.state] ?? 9) - (order[b.state] ?? 9) || a.name.localeCompare(b.name);
+    if (SORT === "checkin") return (a.checkInMin ?? 9999) - (b.checkInMin ?? 9999);
+    if (SORT === "hours")   return b.activeMinutesToday - a.activeMinutesToday;
+    if (SORT === "name")    return a.name.localeCompare(b.name);
+  });
+
+  const body = document.getElementById("roster-body");
+  if (!list.length) {
+    body.innerHTML = `<div class="text-sm text-[#8a7a65] py-8 text-center">No members match this filter.</div>`;
     return;
   }
-  grid.innerHTML = data.map(u => {
-    const s = stateStyle[u.state] || stateStyle.stale;
-    const idle = u.idleSeconds == null ? "—" : (u.idleSeconds < 60 ? Math.round(u.idleSeconds) + "s" : Math.round(u.idleSeconds/60) + "m");
-    const ageMin = u.ageMinutes == null ? "—" : (u.ageMinutes < 1 ? "just now" : Math.round(u.ageMinutes) + "m ago");
-    const machine = u.lastComputer || "";
+
+  // Find today's segments per user for the inline bar
+  body.innerHTML = list.map(m => {
+    const statusDot = `<span class="dot ${statusCls(m.state)} ${m.state === "active" ? "pulse" : ""}"></span>`;
+    const idleCell = m.state === "offline" ? "—"
+                    : (m.idleMin == null ? "0m" : (m.idleMin > 10 ? `<span class="text-[#a14b1a]">${m.idleMin}m</span>` : `${m.idleMin}m`));
     return `
-      <div class="group relative bg-white rounded-lg shadow-sm ring-1 ring-slate-200 p-4">
-        <button class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-red-600" title="Delete all data for this machine" data-delete-computer="${escapeAttr(machine)}">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.58.177-2.35.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4z" clip-rule="evenodd"/></svg>
-        </button>
-        <div class="flex items-center justify-between pr-6">
-          <div class="font-medium">${escapeHtml(u.user)}</div>
-          <span class="pill ${s.cls}"><span class="dot" style="background:${s.dot}"></span>${s.text}</span>
+      <div class="row grid gap-4 items-center py-3 px-1 border-b border-[#f2ead6]" data-user="${escapeHtml(m.user)}"
+           style="grid-template-columns: 240px 100px 90px 80px 1fr 90px 90px;${m.state === "offline" ? "opacity:.65;" : ""}">
+        <div class="flex items-center gap-2.5 min-w-0">
+          ${avatarHtml(m.name, 30)}
+          <div class="min-w-0">
+            <div class="text-[13px] font-medium truncate">${escapeHtml(m.name)}</div>
+            <div class="text-[11px] text-[#8a7a65] truncate">${escapeHtml(m.lastComputer || "—")}</div>
+          </div>
         </div>
-        <dl class="mt-3 grid grid-cols-3 gap-2 text-xs">
-          <div><dt class="text-slate-400">Idle</dt><dd class="tabular">${idle}</dd></div>
-          <div><dt class="text-slate-400">Last signal</dt><dd class="tabular">${ageMin}</dd></div>
-          <div><dt class="text-slate-400">Machine</dt><dd class="truncate" title="${escapeHtml(machine)}">${escapeHtml(machine || '—')}</dd></div>
-        </dl>
+        <div class="flex items-center gap-1.5 text-xs">${statusDot}<span>${statusLabel(m.state)}</span></div>
+        <div class="mono text-xs text-[#47372a]">${m.checkInMin != null ? fmtHM(m.checkInMin) : "—"}</div>
+        <div class="mono text-xs">${idleCell}</div>
+        <div>${inlineDayBar(m)}</div>
+        <div class="mono text-xs text-right">${fmtMin(m.activeMinutesToday)}</div>
+        <div class="mono text-xs text-right text-[#8a7a65]">${fmtMin(m.activeMinutesWeek)}</div>
       </div>`;
   }).join("");
-  grid.querySelectorAll("[data-delete-computer]").forEach(btn => {
-    btn.addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      const computer = btn.dataset.deleteComputer;
-      if (!computer) return;
-      if (!confirm(`Delete ALL events for "${computer}"?\n\nThis cannot be undone.`)) return;
-      const r = await fetch(`/v1/events?computer=${encodeURIComponent(computer)}`, { method: "DELETE" });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok) {
-        alert(`Deleted ${j.deleted ?? 0} events for ${computer}`);
-        refresh();
-      } else {
-        alert(`Delete failed: ${j.detail || r.status}`);
-      }
-    });
+
+  body.querySelectorAll(".row").forEach(r => {
+    r.addEventListener("click", () => openDetail(r.dataset.user));
   });
 }
 
-async function loadSummary() {
-  const { from, to } = isoRange();
-  const r = await fetch(`/v1/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-  const rows = await r.json();
-  const body = document.getElementById("summary-body");
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-slate-400 text-center">No activity in this range.</td></tr>';
-    return;
-  }
-  const maxActive = Math.max(1, ...rows.map(r => r.activeMinutes || 0));
-  body.innerHTML = rows.map(r => {
-    const dayIdx = new Date(r.date + "T00:00:00").getDay();
-    const pct = Math.round(100 * (r.activeMinutes||0) / maxActive);
-    const weekendCls = (dayIdx === 0 || dayIdx === 6) ? "text-slate-400" : "";
+function inlineDayBar(m) {
+  // Use just the summary shape (firstArrival → lastActivity, locked chunks) for
+  // the roster's inline bar — we don't load per-user events here for perf.
+  const today = TODAY_SUMMARY.find(s => s.user === m.user);
+  if (!today || !today.firstArrival) return `<div class="daybar"></div>`;
+  const total = DAY_END_MIN - DAY_START_MIN;
+  const startMin = hmsToMin(today.firstArrival);
+  const endMin = today.lastActivity ? hmsToMin(today.lastActivity) : toMinOfDay(new Date());
+  const span = Math.max(0, endMin - startMin);
+  const locked = Math.min(span, today.lockedMinutes || 0);
+  const active = Math.max(0, span - locked);
+  const lx = ((startMin - DAY_START_MIN) / total) * 100;
+  const lw = (active / total) * 100;
+  const hx = ((startMin + active - DAY_START_MIN) / total) * 100;
+  const hw = (locked / total) * 100;
+  const nowMin = toMinOfDay(new Date());
+  const nowPct = Math.max(0, Math.min(100, ((nowMin - DAY_START_MIN) / total) * 100));
+  return `<div class="daybar">
+    <span class="bg-active" style="left:${lx}%;width:${lw}%"></span>
+    ${locked > 0 ? `<span class="bg-lunch" style="left:${hx}%;width:${hw}%"></span>` : ""}
+    <span class="now" style="left:${nowPct}%"></span>
+  </div>`;
+}
+
+// --- detail view -----------------------------------------------------
+async function openDetail(user) {
+  CURRENT_USER = user;
+  document.getElementById("view-roster").style.display = "none";
+  document.getElementById("view-detail").style.display = "block";
+  renderDetailSidebar();
+  await loadDetail(user);
+}
+function backToRoster() {
+  document.getElementById("view-detail").style.display = "none";
+  document.getElementById("view-roster").style.display = "";
+  CURRENT_USER = null;
+}
+
+function renderDetailSidebar() {
+  const html = ROSTER.map(m => {
+    const selected = m.user === CURRENT_USER;
     return `
-      <tr class="hover:bg-slate-50 cursor-pointer ${weekendCls}" data-user="${escapeAttr(r.user)}" data-date="${r.date}">
-        <td class="px-4 py-2.5 font-medium">${escapeHtml(r.user)}</td>
-        <td class="px-4 py-2.5 tabular">${r.date}</td>
-        <td class="px-4 py-2.5">${DOW[dayIdx]}</td>
-        <td class="px-4 py-2.5 text-right tabular">${r.firstArrival ?? "—"}</td>
-        <td class="px-4 py-2.5 text-right tabular">${r.lastActivity ?? "—"}</td>
-        <td class="px-4 py-2.5 text-right tabular">${fmtMin(r.lockedMinutes)}</td>
-        <td class="px-4 py-2.5 text-right tabular font-medium">${fmtMin(r.activeMinutes)}</td>
-        <td class="px-4 py-2.5"><div class="bar"><span style="width:${pct}%"></span></div></td>
-        <td class="px-4 py-2.5 text-slate-500 text-xs">${escapeHtml((r.machines||[]).join(", "))}</td>
-      </tr>`;
+      <div data-user="${escapeHtml(m.user)}" class="sb-item flex items-center gap-2.5 p-2 rounded-lg mb-0.5 cursor-pointer ${selected ? "bg-white shadow-sm border border-[#e7dfcd]" : "hover:bg-[#efe7d2]"}">
+        <div class="relative">
+          ${avatarHtml(m.name, 26)}
+          <span class="absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full ${statusCls(m.state)}" style="box-shadow: 0 0 0 2px ${selected ? '#fff' : '#f7f1e2'}"></span>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="text-[12px] font-medium truncate">${escapeHtml(m.name)}</div>
+          <div class="text-[10px] text-[#8a7a65]">${statusLabel(m.state)}</div>
+        </div>
+      </div>`;
   }).join("");
-  // Row click -> drill-in
-  body.querySelectorAll("tr[data-user]").forEach(tr => {
-    tr.addEventListener("click", () => showTimeline(tr.dataset.user, tr.dataset.date));
+  const sb = document.getElementById("sidebar-members");
+  sb.innerHTML = html;
+  sb.querySelectorAll(".sb-item").forEach(el => {
+    el.addEventListener("click", () => openDetail(el.dataset.user));
   });
-  document.getElementById("generated-at").textContent =
-    "Generated " + new Date().toLocaleString(undefined, { dateStyle:"medium", timeStyle:"short" });
 }
 
-async function showTimeline(user, date) {
-  const from = date + "T00:00:00";
-  const to   = date + "T23:59:59";
-  const r = await fetch(`/v1/events?from=${from}&to=${to}&user=${encodeURIComponent(user)}`);
-  const events = await r.json();
-  const lines = events.map(e => {
-    const t = e.timestamp.split("T")[1].slice(0,8);
-    return `${t}  ${e.eventType.padEnd(10)}  ${e.computer}`;
-  }).join("\n");
-  alert(`${user}  —  ${date}\n\n${lines || "(no events)"}`);
+async function loadDetail(user) {
+  const now = new Date();
+  const today = startOfDay(now);
+  const weekStart = new Date(today); weekStart.setDate(weekStart.getDate() - 6);
+  const [evR, weekR] = await Promise.all([
+    fetch(`/v1/events?from=${iso(today)}&to=${iso(endOfDay(now))}&user=${encodeURIComponent(user)}`).then(r => r.json()),
+    fetch(`/v1/summary?from=${iso(weekStart)}&to=${iso(endOfDay(now))}&user=${encodeURIComponent(user)}`).then(r => r.json()),
+  ]);
+  DETAIL_EVENTS = evR || [];
+  const weekSum = weekR || [];
+  const member = ROSTER.find(m => m.user === user) || { user, name: displayOf({ user }), state: "offline" };
+  const { segs, checkIn, checkOut } = buildSegments(DETAIL_EVENTS, now);
+  renderDetailHeader(member, checkIn, checkOut);
+  renderBigTimeline(segs);
+  renderEventLog(DETAIL_EVENTS);
+  renderWeekSpark(member, weekSum, segs, now);
 }
 
-function escapeHtml(s) { return (s??"").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
-function escapeAttr(s) { return escapeHtml(s); }
+function renderDetailHeader(member, checkIn, checkOut) {
+  document.getElementById("detail-avatar").innerHTML = avatarHtml(member.name, 52);
+  document.getElementById("detail-name").textContent = member.name;
+  document.getElementById("detail-sub").innerHTML = `
+    <span>${escapeHtml(member.lastComputer || "—")}</span>
+    <span class="dot ${statusCls(member.state)} ${member.state === "active" ? "pulse" : ""}"></span>
+    <span>${statusLabel(member.state)}${member.idleMin && member.state !== "offline" ? ` · ${member.idleMin}m idle` : ""}</span>`;
+  document.getElementById("kpi-in").textContent    = checkIn != null ? fmtHM(checkIn) : "—";
+  document.getElementById("kpi-out").textContent   = checkOut != null ? fmtHM(checkOut) : "—";
+  document.getElementById("kpi-today").textContent = fmtMin(member.activeMinutesToday);
+  document.getElementById("kpi-week").textContent  = fmtMin(member.activeMinutesWeek);
+}
 
-async function refresh() { await Promise.all([loadNow(), loadSummary()]); }
-document.getElementById("refresh").addEventListener("click", refresh);
-document.getElementById("range").addEventListener("change", loadSummary);
-refresh();
-setInterval(loadNow, 60_000);  // refresh "Now" every minute
+function renderBigTimeline(segs) {
+  const total = DAY_END_MIN - DAY_START_MIN;
+  const tl = document.getElementById("big-timeline");
+  const pct = (m) => ((m - DAY_START_MIN) / total) * 100;
+  const nowMin = toMinOfDay(new Date());
+  const hours = [];
+  for (let h = 8; h <= 18; h++) hours.push(h);
+
+  tl.innerHTML = [
+    ...hours.map(h => `<div class="grid" style="left:${pct(h*60)}%"></div>`),
+    ...segs.map(s => {
+      const label = s.kind === "active" ? "" : s.kind.toUpperCase();
+      const w = pct(s.end) - pct(s.start);
+      return `<div class="seg ${statusCls(s.kind)}" style="left:${pct(s.start)}%;width:${w}%">${w > 5 ? label : ""}</div>`;
+    }),
+    `<div class="now" style="left:${pct(Math.max(DAY_START_MIN, Math.min(DAY_END_MIN, nowMin)))}%">
+       <div class="tip">now · ${fmtHM(nowMin)}</div>
+     </div>`,
+  ].join("");
+
+  document.getElementById("timeline-axis").innerHTML =
+    hours.map(h => `<span>${String(h).padStart(2,"0")}:00</span>`).join("");
+}
+
+function renderEventLog(events) {
+  // Reshape events into user-facing log entries, newest first.
+  const log = [];
+  let prev = null;
+  const sorted = events.slice().sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+  for (const e of sorted) {
+    const t = toMinOfDay(new Date(e.timestamp));
+    const et = e.eventType;
+    if (et === "Logon" && !prev) log.push({ t, kind: "in",    label: "Checked in",    detail: "Session started" });
+    else if (et === "Unlock")    log.push({ t, kind: "back",  label: "Unlocked",      detail: "Resumed activity" });
+    else if (et === "Resume")    log.push({ t, kind: "back",  label: "Woke from sleep", detail: "Device resumed" });
+    else if (et === "Lock")      log.push({ t, kind: "lunch", label: "Locked",        detail: "Screen locked" });
+    else if (et === "Sleep")     log.push({ t, kind: "lunch", label: "Sleep",         detail: "Device slept" });
+    else if (et === "Logoff")    log.push({ t, kind: "out",   label: "Checked out",   detail: "Session ended" });
+    prev = e;
+  }
+  const dotFor = { in:"bg-active", back:"bg-active", lunch:"bg-lunch", idle:"bg-idle", out:"bg-offline" };
+  log.sort((a,b) => b.t - a.t); // newest first
+  const html = log.length ? log.map(e => `
+    <div class="grid py-2 border-b border-[#f2ead6]" style="grid-template-columns: 72px 16px 1fr auto; gap:12px; align-items:center;">
+      <div class="mono text-xs text-[#47372a]">${fmtHM(e.t)}</div>
+      <div class="flex justify-center"><span class="dot ${dotFor[e.kind] || "bg-stale"}"></span></div>
+      <div class="text-[13px] font-medium">${escapeHtml(e.label)}</div>
+      <div class="text-[11px] text-[#8a7a65]">${escapeHtml(e.detail)}</div>
+    </div>`).join("")
+    : `<div class="text-sm text-[#8a7a65] py-6">No events today.</div>`;
+  document.getElementById("event-log").innerHTML = html;
+}
+
+function renderWeekSpark(member, weekSum, todaySegs, now) {
+  const total = DAY_END_MIN - DAY_START_MIN;
+  // Build 5 working days: Mon..Fri of the current week
+  const weekdays = [];
+  const monday = new Date(now); monday.setHours(0,0,0,0);
+  const wd = (monday.getDay() + 6) % 7;  // 0=Mon
+  monday.setDate(monday.getDate() - wd);
+  const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday); d.setDate(monday.getDate() + i);
+    const iso = localIso(d);
+    const isToday = d.toDateString() === now.toDateString();
+    const isFuture = d > now && !isToday;
+    const sum = weekSum.find(s => s.date === iso);
+    weekdays.push({ label: DOW[d.getDay()], iso, isToday, isFuture, sum });
+  }
+  const weekTotal = weekSum.reduce((a, s) => a + (s.activeMinutes || 0), 0);
+
+  const spark = weekdays.map(d => {
+    let segsHtml = "";
+    if (d.isToday && todaySegs.length) {
+      segsHtml = todaySegs.map(s => {
+        const left = ((s.start - DAY_START_MIN) / total) * 100;
+        const w = ((s.end - s.start) / total) * 100;
+        return `<span class="${statusCls(s.kind)}" style="position:absolute;left:${left}%;width:${w}%;top:0;bottom:0"></span>`;
+      }).join("");
+    } else if (d.sum && d.sum.firstArrival) {
+      const start = hmsToMin(d.sum.firstArrival);
+      const end   = d.sum.lastActivity ? hmsToMin(d.sum.lastActivity) : start;
+      const locked = d.sum.lockedMinutes || 0;
+      const span   = Math.max(0, end - start);
+      const active = Math.max(0, span - locked);
+      const lx = ((start - DAY_START_MIN) / total) * 100;
+      const lw = (active / total) * 100;
+      const hx = ((start + active - DAY_START_MIN) / total) * 100;
+      const hw = (locked / total) * 100;
+      segsHtml =
+        `<span class="bg-active" style="position:absolute;left:${lx}%;width:${lw}%;top:0;bottom:0"></span>` +
+        (locked ? `<span class="bg-lunch" style="position:absolute;left:${hx}%;width:${hw}%;top:0;bottom:0"></span>` : "");
+    }
+    const hours = d.sum ? fmtMin(d.sum.activeMinutes || 0) : "—";
+    const dim = d.isFuture ? "text-[#b5aa98]" : (d.isToday ? "font-semibold" : "");
+    return `
+      <div class="mb-2.5">
+        <div class="flex justify-between text-[11px] mb-1 ${dim}">
+          <span>${d.label}${d.isToday ? " · today" : ""}</span>
+          <span class="mono">${d.isFuture ? "—" : hours}</span>
+        </div>
+        <div style="position:relative;height:8px;background:#ede6d7;border-radius:3px;overflow:hidden">${segsHtml}</div>
+      </div>`;
+  }).join("");
+  document.getElementById("week-spark").innerHTML = spark + `
+    <div class="mt-3 pt-3 border-t border-[#e7dfcd]">
+      <div class="flex justify-between text-[11px]"><span class="text-[#8a7a65]">Week total</span><span class="mono font-semibold">${fmtMin(weekTotal)}</span></div>
+    </div>`;
+}
+
+// --- wiring ----------------------------------------------------------
+document.getElementById("btn-refresh").addEventListener("click", loadRoster);
+document.getElementById("btn-back").addEventListener("click", backToRoster);
+document.getElementById("sort-by").addEventListener("change", (e) => { SORT = e.target.value; renderRoster(); });
+document.querySelectorAll(".filter-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    FILTER = b.dataset.filter;
+    document.querySelectorAll(".filter-btn").forEach(x => {
+      x.classList.toggle("bg-[#efe7d2]", x.dataset.filter === FILTER);
+      x.classList.toggle("text-[#8a7a65]", x.dataset.filter !== FILTER);
+    });
+    renderRoster();
+  });
+});
+
+function tickClock() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2,"0");
+  const mm = String(d.getMinutes()).padStart(2,"0");
+  const ss = String(d.getSeconds()).padStart(2,"0");
+  document.getElementById("live-clock").textContent = `${hh}:${mm}:${ss}`;
+}
+setInterval(tickClock, 1000); tickClock();
+
+loadRoster();
+setInterval(() => { if (!CURRENT_USER) loadRoster(); }, 60_000);
 </script>
 </body>
 </html>

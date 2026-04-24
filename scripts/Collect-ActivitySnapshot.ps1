@@ -32,6 +32,14 @@ if ($state -and $state.bookmarks) {
     }
 }
 
+# Display-name cache survives across runs so we only query SAM/ADSI once per user.
+$displayNameCache = @{}
+if ($state -and $state.displayNames) {
+    foreach ($n in $state.displayNames.PSObject.Properties.Name) {
+        $displayNameCache[$n] = $state.displayNames.$n
+    }
+}
+
 if ($state -and $state.lastRunUtc) {
     # Re-read with 5-min overlap to cover any in-flight events; dedupe via RecordId bookmark below
     $start = ([datetime]::Parse($state.lastRunUtc)).ToLocalTime().AddMinutes(-5)
@@ -111,6 +119,50 @@ function Get-SessionSnapshot {
         }
     } catch { }
     , $sessions
+}
+
+# A session is "locked" when LogonUI.exe is running inside it. Works on
+# domain-joined, Entra-joined, and local sessions without needing any rights
+# beyond reading the process table.
+function Get-SessionLockedMap {
+    $map = @{}
+    try {
+        $logonUi = Get-CimInstance Win32_Process -Filter "Name='LogonUI.exe'" -ErrorAction Stop
+        foreach ($p in $logonUi) { $map[[int]$p.SessionId] = $true }
+    } catch { }
+    return $map
+}
+
+# Turn quser's "4/24/2026 9:12 AM" into ISO 8601 in local tz. Returns $null
+# on parse failure so the server can fall back to the Logon event timestamp.
+function ConvertTo-IsoLogonTime {
+    param([string]$Raw)
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return $null }
+    try { return ([datetime]::Parse($Raw)).ToString('o') } catch { return $null }
+}
+
+# Resolve a SAM account name to its display/full name. Cached in state.json
+# between runs to keep the lookup off the hot path.
+function Get-UserDisplayName {
+    param([string]$SamName, [hashtable]$Cache)
+    if ([string]::IsNullOrWhiteSpace($SamName)) { return $null }
+    $key = $SamName.ToLower()
+    if ($Cache.ContainsKey($key)) { return $Cache[$key] }
+
+    $name = $null
+    try {
+        $lu = Get-LocalUser -Name $SamName -ErrorAction Stop
+        if ($lu.FullName) { $name = $lu.FullName }
+    } catch { }
+    if (-not $name) {
+        try {
+            $adsi = [ADSI]"WinNT://$env:COMPUTERNAME/$SamName,User"
+            $full = $adsi.Properties['FullName'].Value
+            if ($full) { $name = "$full" }
+        } catch { }
+    }
+    $Cache[$key] = $name  # cache null results too, so we don't retry every 5 min
+    return $name
 }
 
 function Get-EventsSafe {
@@ -255,20 +307,28 @@ foreach ($e in $tsEvents) {
 
 # Heartbeat: emit an event per active user session with current idle time.
 # Gives the reporter a live "user is still here" signal even when no
-# Security/Kernel-Power event has fired since the last run.
-$idleNow = Get-IdleSeconds
-$nowIso  = (Get-Date).ToString('o')
+# Security/Kernel-Power event has fired since the last run. Also carries the
+# extra context the dashboard needs: display name, lock state, and the
+# session's own logon time (so check-in is reliable even when the 4624
+# Security event was missed / Security log unreadable).
+$idleNow   = Get-IdleSeconds
+$nowIso    = (Get-Date).ToString('o')
+$lockedMap = Get-SessionLockedMap
 foreach ($s in (Get-SessionSnapshot)) {
     if (Test-ExcludedUser $s.user) { continue }
     if ($s.state -notmatch '^(Active|Disc)') { continue }
+    $sessionIdInt = 0; [void][int]::TryParse($s.sessionId, [ref]$sessionIdInt)
     $allEvents += [pscustomobject]@{
-        timestamp   = $nowIso
-        source      = 'Snapshot'
-        eventId     = 9000
-        eventType   = 'Heartbeat'
-        user        = $s.user
-        idleSeconds = $idleNow
-        sessionState = $s.state
+        timestamp        = $nowIso
+        source           = 'Snapshot'
+        eventId          = 9000
+        eventType        = 'Heartbeat'
+        user             = $s.user
+        idleSeconds      = $idleNow
+        sessionState     = $s.state
+        sessionLocked    = [bool]$lockedMap[$sessionIdInt]
+        sessionLogonTime = (ConvertTo-IsoLogonTime $s.logonTime)
+        displayName      = (Get-UserDisplayName -SamName $s.user -Cache $displayNameCache)
     }
 }
 
@@ -319,8 +379,9 @@ $pushInfo = if ($ServerUrl) { "push=$ServerUrl" } else { "push=disabled" }
 Write-Output ("events={0}  securityLogAccess={1}  {2}" -f $allEvents.Count, $securityAccessible, $pushInfo)
 
 $newState = [pscustomobject]@{
-    lastRunUtc = (Get-Date).ToUniversalTime().ToString('o')
-    bookmarks  = $newBookmarks
+    lastRunUtc   = (Get-Date).ToUniversalTime().ToString('o')
+    bookmarks    = $newBookmarks
+    displayNames = $displayNameCache
 }
 $newState | ConvertTo-Json -Depth 4 | Set-Content -Path $stateFile -Encoding UTF8
 

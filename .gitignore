@@ -24,3 +24,6 @@ venv/
 .DS_Store
 Thumbs.db
 *.swp
+
+# Playwright CLI scratch (snapshots, console logs)
+.playwright-cli/

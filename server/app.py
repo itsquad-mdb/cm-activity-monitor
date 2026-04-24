@@ -86,6 +86,12 @@ class Event(BaseModel):
     logonTypeName: Optional[str] = None
     idleSeconds: Optional[float] = None
     sessionState: Optional[str] = None
+    # Heartbeat enrichment from Collect-ActivitySnapshot.ps1. Stored inside the
+    # existing `extra` JSON column so no schema migration is required; the
+    # dashboard reads them from there.
+    sessionLocked: Optional[bool] = None
+    sessionLogonTime: Optional[str] = None
+    displayName: Optional[str] = None
     computer: Optional[str] = None  # may be present on each event too
 
 
@@ -315,7 +321,7 @@ def get_status(x_api_key: Optional[str] = Header(None)):
     check_auth(x_api_key)
     with closing(db()) as conn:
         rows = conn.execute(
-            "SELECT user, ts, event_type, computer, idle_seconds FROM events e1 "
+            "SELECT user, ts, event_type, computer, idle_seconds, extra FROM events e1 "
             "WHERE user IS NOT NULL AND ts = ("
             "  SELECT MAX(ts) FROM events e2 WHERE e2.user = e1.user"
             ") ORDER BY user"
@@ -330,7 +336,15 @@ def get_status(x_api_key: Optional[str] = Header(None)):
             continue
         age_min = (now - last_dt.astimezone(timezone.utc)).total_seconds() / 60.0
         et = r["event_type"]
-        if et in ("Lock", "Sleep"):
+        extra = {}
+        if r["extra"]:
+            try:
+                extra = json.loads(r["extra"])
+            except Exception:
+                extra = {}
+        session_locked = bool(extra.get("sessionLocked")) if "sessionLocked" in extra else None
+
+        if et in ("Lock", "Sleep") or session_locked:
             state = "locked"
         elif et in ("Logoff",):
             state = "offline"
@@ -342,6 +356,9 @@ def get_status(x_api_key: Optional[str] = Header(None)):
             state = "active"
         out.append({
             "user": r["user"],
+            "displayName": extra.get("displayName"),
+            "sessionLocked": session_locked,
+            "sessionLogonTime": extra.get("sessionLogonTime"),
             "lastEvent": et,
             "lastEventAt": r["ts"],
             "lastComputer": r["computer"],

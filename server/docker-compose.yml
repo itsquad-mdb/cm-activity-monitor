@@ -1,0 +1,31 @@
+services:
+  activity-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - activity-data:/data
+    environment:
+      DB_PATH: /data/activity.db
+      # Leave API_KEY empty to rely solely on Traefik IP whitelist.
+      # Set it later if you want to add a second factor.
+      API_KEY: ${API_KEY:-}
+    networks:
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.activity-monitor.rule=Host(`${DOMAIN:-activity.itsquad.org}`)
+      - traefik.http.routers.activity-monitor.entrypoints=websecure
+      - traefik.http.routers.activity-monitor.tls.certresolver=letsencrypt
+      - traefik.http.services.activity-monitor.loadbalancer.server.port=8000
+      # IP whitelist middleware. Set ALLOWED_IPS env var in Dokploy (comma-separated CIDRs).
+      - traefik.http.routers.activity-monitor.middlewares=activity-ipallowlist@docker
+      - traefik.http.middlewares.activity-ipallowlist.ipallowlist.sourcerange=${ALLOWED_IPS:-127.0.0.1/32}
+
+volumes:
+  activity-data:
+
+networks:
+  dokploy-network:
+    external: true

@@ -1,0 +1,26 @@
+# Local data / state (never commit)
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+last-snapshot.json
+state.json
+run-trace.log
+report/
+report-multi/
+endpoints/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

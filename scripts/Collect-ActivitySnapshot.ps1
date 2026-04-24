@@ -7,7 +7,9 @@ param(
     # Optional server push. If set, new events are POSTed after local write.
     # Reads from params OR from env vars ACTIVITY_SERVER_URL / ACTIVITY_API_KEY.
     [string]$ServerUrl = $env:ACTIVITY_SERVER_URL,
-    [string]$ApiKey    = $env:ACTIVITY_API_KEY
+    [string]$ApiKey    = $env:ACTIVITY_API_KEY,
+    # One-off flag: wipe the bookmark state so this run re-reads the full LookbackHours.
+    [switch]$ResetState
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +17,9 @@ $outputDir = Split-Path -Parent $OutputPath
 if (-not (Test-Path $outputDir)) { New-Item -ItemType Directory -Path $outputDir -Force | Out-Null }
 
 $stateFile = Join-Path $outputDir 'state.json'
+if ($ResetState -and (Test-Path $stateFile)) {
+    Remove-Item $stateFile -Force
+}
 $state = $null
 if (Test-Path $stateFile) {
     try { $state = Get-Content $stateFile -Raw | ConvertFrom-Json } catch {}

@@ -113,19 +113,39 @@ async function loadNow() {
     const s = stateStyle[u.state] || stateStyle.stale;
     const idle = u.idleSeconds == null ? "—" : (u.idleSeconds < 60 ? Math.round(u.idleSeconds) + "s" : Math.round(u.idleSeconds/60) + "m");
     const ageMin = u.ageMinutes == null ? "—" : (u.ageMinutes < 1 ? "just now" : Math.round(u.ageMinutes) + "m ago");
+    const machine = u.lastComputer || "";
     return `
-      <div class="bg-white rounded-lg shadow-sm ring-1 ring-slate-200 p-4">
-        <div class="flex items-center justify-between">
+      <div class="group relative bg-white rounded-lg shadow-sm ring-1 ring-slate-200 p-4">
+        <button class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-red-600" title="Delete all data for this machine" data-delete-computer="${escapeAttr(machine)}">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.58.177-2.35.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4z" clip-rule="evenodd"/></svg>
+        </button>
+        <div class="flex items-center justify-between pr-6">
           <div class="font-medium">${escapeHtml(u.user)}</div>
           <span class="pill ${s.cls}"><span class="dot" style="background:${s.dot}"></span>${s.text}</span>
         </div>
         <dl class="mt-3 grid grid-cols-3 gap-2 text-xs">
           <div><dt class="text-slate-400">Idle</dt><dd class="tabular">${idle}</dd></div>
           <div><dt class="text-slate-400">Last signal</dt><dd class="tabular">${ageMin}</dd></div>
-          <div><dt class="text-slate-400">Machine</dt><dd class="truncate" title="${escapeHtml(u.lastComputer||'')}">${escapeHtml(u.lastComputer||'—')}</dd></div>
+          <div><dt class="text-slate-400">Machine</dt><dd class="truncate" title="${escapeHtml(machine)}">${escapeHtml(machine || '—')}</dd></div>
         </dl>
       </div>`;
   }).join("");
+  grid.querySelectorAll("[data-delete-computer]").forEach(btn => {
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const computer = btn.dataset.deleteComputer;
+      if (!computer) return;
+      if (!confirm(`Delete ALL events for "${computer}"?\n\nThis cannot be undone.`)) return;
+      const r = await fetch(`/v1/events?computer=${encodeURIComponent(computer)}`, { method: "DELETE" });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        alert(`Deleted ${j.deleted ?? 0} events for ${computer}`);
+        refresh();
+      } else {
+        alert(`Delete failed: ${j.detail || r.status}`);
+      }
+    });
+  });
 }
 
 async function loadSummary() {

@@ -191,6 +191,32 @@ def list_computers(x_api_key: Optional[str] = Header(None)):
     return [dict(r) for r in rows]
 
 
+@app.delete("/v1/events")
+def delete_events(
+    computer: Optional[str] = None,
+    user: Optional[str] = None,
+    x_api_key: Optional[str] = Header(None),
+):
+    """Hard-delete events matching computer and/or user filter. At least one required."""
+    check_auth(x_api_key)
+    if not computer and not user:
+        raise HTTPException(status_code=400, detail="Must specify at least one of: computer, user")
+    sql = "DELETE FROM events WHERE 1=1"
+    args: list = []
+    if computer:
+        sql += " AND computer = ?"
+        args.append(computer)
+    if user:
+        sql += " AND user = ?"
+        args.append(normalize_user(user))
+    with closing(db()) as conn:
+        cur = conn.execute(sql, args)
+        conn.commit()
+        deleted = cur.rowcount
+    log.info("delete computer=%s user=%s deleted=%d", computer, user, deleted)
+    return {"deleted": deleted}
+
+
 @app.get("/v1/users")
 def list_users(x_api_key: Optional[str] = Header(None)):
     check_auth(x_api_key)

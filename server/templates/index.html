@@ -140,22 +140,30 @@
         <div class="flex gap-8">
           <div><div class="kicker">Check in</div><div class="mono text-base font-semibold mt-1" id="kpi-in">—</div></div>
           <div><div class="kicker">Check out</div><div class="mono text-base font-semibold mt-1" id="kpi-out">—</div></div>
-          <div><div class="kicker">Active today</div><div class="mono text-base font-semibold mt-1" id="kpi-today">—</div></div>
+          <div><div class="kicker" id="kpi-active-label">Active today</div><div class="mono text-base font-semibold mt-1" id="kpi-today">—</div></div>
           <div><div class="kicker">This week</div><div class="mono text-base font-semibold mt-1" id="kpi-week">—</div></div>
         </div>
       </div>
       <!-- Day timeline -->
       <div class="px-8 pt-6 pb-5 border-b border-[#f0e8d4]">
         <div class="flex items-baseline justify-between mb-3">
-          <div>
-            <div class="kicker">Today</div>
-            <div class="text-sm font-medium mt-0.5">Day timeline</div>
+          <div class="flex items-center gap-2">
+            <button id="btn-prev-day" title="Previous day"
+              class="w-7 h-7 rounded-md border border-[#e1d8c2] bg-white flex items-center justify-center text-[#47372a] hover:bg-[#f5efe1] disabled:opacity-30 disabled:cursor-not-allowed">‹</button>
+            <div>
+              <div class="kicker" id="detail-date-kicker">Today</div>
+              <div class="text-sm font-medium mt-0.5" id="detail-date-label">Day timeline</div>
+            </div>
+            <button id="btn-next-day" title="Next day"
+              class="w-7 h-7 rounded-md border border-[#e1d8c2] bg-white flex items-center justify-center text-[#47372a] hover:bg-[#f5efe1] disabled:opacity-30 disabled:cursor-not-allowed">›</button>
+            <button id="btn-today" title="Jump back to today"
+              class="ml-2 text-xs text-[#8a7a65] hover:text-[#2b2018] underline underline-offset-2 hidden">today</button>
           </div>
           <div class="flex gap-4 text-xs text-[#8a7a65]">
             <span class="flex items-center gap-1.5"><span class="dot bg-active"></span>Active</span>
             <span class="flex items-center gap-1.5"><span class="dot bg-idle"></span>Idle</span>
             <span class="flex items-center gap-1.5"><span class="dot bg-lunch"></span>Locked</span>
-            <span class="flex items-center gap-1.5"><span class="dot" style="background:#2b2018"></span>Now</span>
+            <span class="flex items-center gap-1.5" id="now-legend"><span class="dot" style="background:#2b2018"></span>Now</span>
           </div>
         </div>
         <div class="big-timeline" id="big-timeline"></div>
@@ -168,7 +176,10 @@
           <div id="event-log"></div>
         </div>
         <aside class="border-l border-[#f0e8d4] bg-[#f7f1e2] p-5 overflow-auto">
-          <div class="kicker mb-3">This week</div>
+          <div class="flex items-baseline justify-between mb-3">
+            <div class="kicker">This week</div>
+            <div class="text-[10px] text-[#8a7a65]">click a day to view</div>
+          </div>
           <div id="week-spark"></div>
         </aside>
       </div>
@@ -238,9 +249,13 @@ let TODAY_SUMMARY = [];   // /v1/summary filtered to today
 let ROSTER = [];          // derived per-member roster for rendering
 let DETAIL_EVENTS = [];   // events for the currently-open detail day
 let CURRENT_USER = null;  // selected user in detail view
+let VIEW_DATE = new Date(); // which day the detail view is showing (defaults to today)
 
 let FILTER = "all";
 let SORT = "status";
+
+const localIsoDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const isSameDay = (a, b) => a.toDateString() === b.toDateString();
 
 // --- segment derivation from events ----------------------------------
 // Walk a day's events and produce {kind, startMin, endMin} segments across
@@ -317,8 +332,7 @@ async function loadRoster() {
   // Server groups summary rows by local date (using each event's own tz offset),
   // so compare in local time — toISOString() is UTC and would skew by a day
   // whenever the local offset isn't zero.
-  const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  const todayIso = localIso(now);
+  const todayIso = localIsoDate(now);
   TODAY_SUMMARY = WEEK_SUMMARY.filter(s => s.date === todayIso);
 
   // Join: every user seen this week or currently reporting
@@ -454,6 +468,7 @@ function inlineDayBar(m) {
 // --- detail view -----------------------------------------------------
 async function openDetail(user) {
   CURRENT_USER = user;
+  VIEW_DATE = new Date();  // new member → reset to today
   document.getElementById("view-roster").style.display = "none";
   document.getElementById("view-detail").style.display = "block";
   renderDetailSidebar();
@@ -463,6 +478,14 @@ function backToRoster() {
   document.getElementById("view-detail").style.display = "none";
   document.getElementById("view-roster").style.display = "";
   CURRENT_USER = null;
+}
+
+async function navigateToDay(date) {
+  if (!CURRENT_USER) return;
+  const now = new Date();
+  if (date > now && !isSameDay(date, now)) return;  // no future days
+  VIEW_DATE = date;
+  await loadDetail(CURRENT_USER);
 }
 
 function renderDetailSidebar() {
@@ -489,55 +512,84 @@ function renderDetailSidebar() {
 
 async function loadDetail(user) {
   const now = new Date();
-  const today = startOfDay(now);
-  const weekStart = new Date(today); weekStart.setDate(weekStart.getDate() - 6);
+  const viewStart = startOfDay(VIEW_DATE);
+  const viewEnd   = endOfDay(VIEW_DATE);
+  const weekStart = new Date(now); weekStart.setDate(weekStart.getDate() - 6); weekStart.setHours(0,0,0,0);
   const [evR, weekR] = await Promise.all([
-    fetch(`/v1/events?from=${iso(today)}&to=${iso(endOfDay(now))}&user=${encodeURIComponent(user)}`).then(r => r.json()),
+    fetch(`/v1/events?from=${iso(viewStart)}&to=${iso(viewEnd)}&user=${encodeURIComponent(user)}`).then(r => r.json()),
     fetch(`/v1/summary?from=${iso(weekStart)}&to=${iso(endOfDay(now))}&user=${encodeURIComponent(user)}`).then(r => r.json()),
   ]);
   DETAIL_EVENTS = evR || [];
   const weekSum = weekR || [];
   const member = ROSTER.find(m => m.user === user) || { user, name: displayOf({ user }), state: "offline" };
-  const { segs, checkIn, checkOut } = buildSegments(DETAIL_EVENTS, now);
-  renderDetailHeader(member, checkIn, checkOut);
-  renderBigTimeline(segs);
+  const { segs, checkIn, checkOut } = buildSegments(DETAIL_EVENTS, VIEW_DATE);
+  const viewedSummary = weekSum.find(s => s.date === localIsoDate(VIEW_DATE));
+  renderDetailHeader(member, checkIn, checkOut, viewedSummary, now);
+  renderBigTimeline(segs, now);
   renderEventLog(DETAIL_EVENTS);
   renderWeekSpark(member, weekSum, segs, now);
 }
 
-function renderDetailHeader(member, checkIn, checkOut) {
+function renderDetailHeader(member, checkIn, checkOut, viewedSummary, now) {
+  const isToday = isSameDay(VIEW_DATE, now);
+  const dow = VIEW_DATE.toLocaleDateString(undefined, { weekday: "long" });
+  const dm  = VIEW_DATE.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
   document.getElementById("detail-avatar").innerHTML = avatarHtml(member.name, 52);
   document.getElementById("detail-name").textContent = member.name;
-  document.getElementById("detail-sub").innerHTML = `
-    <span>${escapeHtml(member.lastComputer || "—")}</span>
-    <span class="dot ${statusCls(member.state)} ${member.state === "active" ? "pulse" : ""}"></span>
-    <span>${statusLabel(member.state)}${member.idleMin && member.state !== "offline" ? ` · ${member.idleMin}m idle` : ""}</span>`;
-  document.getElementById("kpi-in").textContent    = checkIn != null ? fmtHM(checkIn) : "—";
+  // Live status line only applies to today — for past days just show the date context.
+  const subEl = document.getElementById("detail-sub");
+  if (isToday) {
+    subEl.innerHTML = `
+      <span>${escapeHtml(member.lastComputer || "—")}</span>
+      <span class="dot ${statusCls(member.state)} ${member.state === "active" ? "pulse" : ""}"></span>
+      <span>${statusLabel(member.state)}${member.idleMin && member.state !== "offline" ? ` · ${member.idleMin}m idle` : ""}</span>`;
+  } else {
+    subEl.innerHTML = `<span>${escapeHtml(member.lastComputer || "—")}</span><span>· historical view</span>`;
+  }
+
+  // Date strip above the big timeline — always tells you which day you're on.
+  document.getElementById("detail-date-kicker").textContent = isToday ? "Today" : dow;
+  document.getElementById("detail-date-label").textContent = isToday ? `${dow} · ${dm}` : `${dow} ${dm}`;
+  document.getElementById("btn-today").classList.toggle("hidden", isToday);
+  document.getElementById("btn-next-day").disabled = isToday;
+
+  // KPIs reflect the viewed day, not always today.
+  document.getElementById("kpi-in").textContent    = checkIn  != null ? fmtHM(checkIn)  : "—";
   document.getElementById("kpi-out").textContent   = checkOut != null ? fmtHM(checkOut) : "—";
-  document.getElementById("kpi-today").textContent = fmtMin(member.activeMinutesToday);
+  document.getElementById("kpi-active-label").textContent = isToday ? "Active today" : `Active ${dow}`;
+  const activeForView = isToday
+    ? (member.activeMinutesToday || 0)
+    : (viewedSummary?.activeMinutes || 0);
+  document.getElementById("kpi-today").textContent = fmtMin(activeForView);
   document.getElementById("kpi-week").textContent  = fmtMin(member.activeMinutesWeek);
 }
 
-function renderBigTimeline(segs) {
+function renderBigTimeline(segs, now) {
   const total = DAY_END_MIN - DAY_START_MIN;
   const tl = document.getElementById("big-timeline");
   const pct = (m) => ((m - DAY_START_MIN) / total) * 100;
-  const nowMin = toMinOfDay(new Date());
+  const isToday = isSameDay(VIEW_DATE, now);
   const hours = [];
   for (let h = 8; h <= 18; h++) hours.push(h);
 
-  tl.innerHTML = [
+  const parts = [
     ...hours.map(h => `<div class="grid" style="left:${pct(h*60)}%"></div>`),
     ...segs.map(s => {
       const label = s.kind === "active" ? "" : s.kind.toUpperCase();
       const w = pct(s.end) - pct(s.start);
       return `<div class="seg ${statusCls(s.kind)}" style="left:${pct(s.start)}%;width:${w}%">${w > 5 ? label : ""}</div>`;
     }),
-    `<div class="now" style="left:${pct(Math.max(DAY_START_MIN, Math.min(DAY_END_MIN, nowMin)))}%">
+  ];
+  if (isToday) {
+    const nowMin = toMinOfDay(now);
+    parts.push(`<div class="now" style="left:${pct(Math.max(DAY_START_MIN, Math.min(DAY_END_MIN, nowMin)))}%">
        <div class="tip">now · ${fmtHM(nowMin)}</div>
-     </div>`,
-  ].join("");
+     </div>`);
+  }
+  tl.innerHTML = parts.join("");
 
+  document.getElementById("now-legend").style.display = isToday ? "" : "none";
   document.getElementById("timeline-axis").innerHTML =
     hours.map(h => `<span>${String(h).padStart(2,"0")}:00</span>`).join("");
 }
@@ -578,20 +630,22 @@ function renderWeekSpark(member, weekSum, todaySegs, now) {
   const monday = new Date(now); monday.setHours(0,0,0,0);
   const wd = (monday.getDay() + 6) % 7;  // 0=Mon
   monday.setDate(monday.getDate() - wd);
-  const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   for (let i = 0; i < 5; i++) {
     const d = new Date(monday); d.setDate(monday.getDate() + i);
-    const iso = localIso(d);
-    const isToday = d.toDateString() === now.toDateString();
+    const iso = localIsoDate(d);
+    const isToday = isSameDay(d, now);
     const isFuture = d > now && !isToday;
+    const isViewed = isSameDay(d, VIEW_DATE);
     const sum = weekSum.find(s => s.date === iso);
-    weekdays.push({ label: DOW[d.getDay()], iso, isToday, isFuture, sum });
+    weekdays.push({ label: DOW[d.getDay()], iso, date: d, isToday, isFuture, isViewed, sum });
   }
   const weekTotal = weekSum.reduce((a, s) => a + (s.activeMinutes || 0), 0);
 
   const spark = weekdays.map(d => {
     let segsHtml = "";
-    if (d.isToday && todaySegs.length) {
+    // If the user is viewing this exact day and we have client-derived segments, use those
+    // for a higher-fidelity bar; otherwise fall back to the coarse summary shape.
+    if (d.isViewed && todaySegs.length) {
       segsHtml = todaySegs.map(s => {
         const left = ((s.start - DAY_START_MIN) / total) * 100;
         const w = ((s.end - s.start) / total) * 100;
@@ -612,25 +666,47 @@ function renderWeekSpark(member, weekSum, todaySegs, now) {
         (locked ? `<span class="bg-lunch" style="position:absolute;left:${hx}%;width:${hw}%;top:0;bottom:0"></span>` : "");
     }
     const hours = d.sum ? fmtMin(d.sum.activeMinutes || 0) : "—";
-    const dim = d.isFuture ? "text-[#b5aa98]" : (d.isToday ? "font-semibold" : "");
+    const dim   = d.isFuture ? "text-[#b5aa98]" : (d.isToday ? "font-semibold" : "");
+    const clickable = !d.isFuture;
+    const selected  = d.isViewed;
+    const rowCls = selected
+      ? "bg-white border border-[#c9b88b] shadow-sm"
+      : (clickable ? "hover:bg-[#efe7d2] border border-transparent" : "border border-transparent opacity-60");
     return `
-      <div class="mb-2.5">
+      <div class="day-pick ${rowCls} ${clickable ? "cursor-pointer" : ""} rounded-md p-2 mb-1.5"
+           data-iso="${d.iso}" ${clickable ? "" : 'data-disabled="1"'}>
         <div class="flex justify-between text-[11px] mb-1 ${dim}">
-          <span>${d.label}${d.isToday ? " · today" : ""}</span>
+          <span>
+            ${selected ? '<span style="color:#8a4a1f">▶</span> ' : ""}${d.label}${d.isToday ? " · today" : ""}
+          </span>
           <span class="mono">${d.isFuture ? "—" : hours}</span>
         </div>
         <div style="position:relative;height:8px;background:#ede6d7;border-radius:3px;overflow:hidden">${segsHtml}</div>
       </div>`;
   }).join("");
-  document.getElementById("week-spark").innerHTML = spark + `
+  const sparkEl = document.getElementById("week-spark");
+  sparkEl.innerHTML = spark + `
     <div class="mt-3 pt-3 border-t border-[#e7dfcd]">
       <div class="flex justify-between text-[11px]"><span class="text-[#8a7a65]">Week total</span><span class="mono font-semibold">${fmtMin(weekTotal)}</span></div>
     </div>`;
+  sparkEl.querySelectorAll(".day-pick:not([data-disabled])").forEach(el => {
+    el.addEventListener("click", () => {
+      const [y, mo, d] = el.dataset.iso.split("-").map(Number);
+      navigateToDay(new Date(y, mo - 1, d));
+    });
+  });
 }
 
 // --- wiring ----------------------------------------------------------
 document.getElementById("btn-refresh").addEventListener("click", loadRoster);
 document.getElementById("btn-back").addEventListener("click", backToRoster);
+document.getElementById("btn-prev-day").addEventListener("click", () => {
+  const d = new Date(VIEW_DATE); d.setDate(d.getDate() - 1); navigateToDay(d);
+});
+document.getElementById("btn-next-day").addEventListener("click", () => {
+  const d = new Date(VIEW_DATE); d.setDate(d.getDate() + 1); navigateToDay(d);
+});
+document.getElementById("btn-today").addEventListener("click", () => navigateToDay(new Date()));
 document.getElementById("sort-by").addEventListener("change", (e) => { SORT = e.target.value; renderRoster(); });
 document.querySelectorAll(".filter-btn").forEach(b => {
   b.addEventListener("click", () => {

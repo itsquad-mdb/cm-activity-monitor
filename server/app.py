@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 from collections import defaultdict
 from contextlib import asynccontextmanager, closing
@@ -26,11 +27,45 @@ def db():
     return conn
 
 
+# Cloud-identity prefixes whose `prefix\sam` form refers to the same person as
+# the bare `sam` and `local-part@domain` forms (Windows reports different forms
+# from Security 4624 / 4634 / TerminalServices / quser for the same logon).
+# Real on-prem domains (e.g. `license-server\admin`) are NOT in this set, so
+# they keep their `DOMAIN\` prefix and won't collide with cloud users.
+KNOWN_CLOUD_PREFIXES = {"azuread"}
+
+
 def normalize_user(name):
+    """Collapse Windows-supplied user identities to a canonical form.
+
+    Handles three shapes for the same human:
+      - DOMAIN\\sam (e.g. azuread\\camstewart) — TerminalServices events
+      - local-part@domain (e.g. cam.stewart@chartwellmarine.com) — Security 4624
+      - bare sam (e.g. camstewart) — Security 4634, quser heartbeats
+
+    Strategy:
+      - Lowercase + trim.
+      - If `prefix\\rest` and prefix is a known cloud prefix, drop the prefix.
+      - Otherwise keep `DOMAIN\\sam` intact (preserves local admin accounts).
+      - For canonical (no-backslash) forms, drop any `@suffix` and any
+        non-alphanumeric character so `cam.stewart` collapses to `camstewart`.
+    """
     if name is None:
         return None
-    s = str(name).strip()
-    return s.lower() if s else None
+    s = str(name).strip().lower()
+    if not s:
+        return None
+    if "\\" in s:
+        prefix, rest = s.split("\\", 1)
+        if prefix in KNOWN_CLOUD_PREFIXES:
+            s = rest
+        else:
+            # Keep DOMAIN\sam intact — protects local accounts from collapsing.
+            return s
+    if "@" in s:
+        s = s.split("@", 1)[0]
+    s = re.sub(r"[^a-z0-9]", "", s)
+    return s or None
 
 
 def init_db():
@@ -57,12 +92,22 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_events_user ON events(user);
             """
         )
-        # Backfill: normalise any legacy user values to lowercase
-        conn.execute(
-            "UPDATE events SET user = LOWER(TRIM(user)) "
-            "WHERE user IS NOT NULL AND user != LOWER(TRIM(user))"
-        )
+        # Backfill: re-normalise existing rows to the current canonical form.
+        # Idempotent — once everything is canonical, subsequent boots are no-ops.
+        distinct = [r[0] for r in conn.execute(
+            "SELECT DISTINCT user FROM events WHERE user IS NOT NULL"
+        ).fetchall()]
+        rewrites = 0
+        for raw in distinct:
+            target = normalize_user(raw)
+            if target and target != raw:
+                cur = conn.execute(
+                    "UPDATE events SET user = ? WHERE user = ?", (target, raw)
+                )
+                rewrites += cur.rowcount
         conn.commit()
+        if rewrites:
+            log.info("user-normalisation backfill: rewrote %d rows", rewrites)
 
 
 @asynccontextmanager

@@ -90,7 +90,7 @@
       <span>Sort by</span>
       <select id="sort-by" class="bg-white border border-[#e7dfcd] rounded-md px-2 py-1 text-xs text-[#2b2018]">
         <option value="status">Status</option>
-        <option value="checkin">Check-in</option>
+        <option value="checkin">Logged in</option>
         <option value="hours">Hours today</option>
         <option value="name">Name</option>
       </select>
@@ -99,7 +99,7 @@
 
   <!-- Column headers -->
   <div class="grid gap-4 text-[10px] font-semibold uppercase tracking-wider text-[#8a7a65] px-1 pt-3 pb-2 border-b border-[#f0e8d4]" style="grid-template-columns: 240px 100px 90px 80px 1fr 90px 90px;">
-    <div>Member</div><div>Status</div><div>Check-in</div><div>Idle</div><div>Day · 08 → 18:30</div><div class="text-right">Today</div><div class="text-right">Week</div>
+    <div>Member</div><div>Status</div><div>Logged in</div><div>Idle</div><div>Day · 08 → 18:30</div><div class="text-right">Today</div><div class="text-right">Week</div>
   </div>
 
   <!-- Rows -->
@@ -138,8 +138,8 @@
           </div>
         </div>
         <div class="flex gap-8">
-          <div><div class="kicker">Check in</div><div class="mono text-base font-semibold mt-1" id="kpi-in">—</div></div>
-          <div><div class="kicker">Check out</div><div class="mono text-base font-semibold mt-1" id="kpi-out">—</div></div>
+          <div><div class="kicker">Logged in</div><div class="mono text-base font-semibold mt-1" id="kpi-in">—</div></div>
+          <div><div class="kicker">Logged out</div><div class="mono text-base font-semibold mt-1" id="kpi-out">—</div></div>
           <div><div class="kicker" id="kpi-active-label">Active today</div><div class="mono text-base font-semibold mt-1" id="kpi-today">—</div></div>
           <div><div class="kicker">This week</div><div class="mono text-base font-semibold mt-1" id="kpi-week">—</div></div>
         </div>
@@ -595,28 +595,48 @@ function renderBigTimeline(segs, now) {
 }
 
 function renderEventLog(events) {
-  // Reshape events into user-facing log entries, newest first.
-  const log = [];
-  let prev = null;
+  // Map raw Windows event types to user-facing log entries. Each entry carries
+  // its source machine so the log makes sense when one user spans multiple PCs.
+  const KIND_OF = {
+    Logon:  { kind: "in",    label: "Logged in",       detail: "Session started" },
+    Unlock: { kind: "back",  label: "Unlocked",        detail: "Resumed activity" },
+    Resume: { kind: "back",  label: "Woke from sleep", detail: "Device resumed" },
+    Lock:   { kind: "lunch", label: "Locked",          detail: "Screen locked" },
+    Sleep:  { kind: "lunch", label: "Sleep",           detail: "Device slept" },
+    Logoff: { kind: "out",   label: "Logged out",      detail: "Session ended" },
+  };
+
   const sorted = events.slice().sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const log = [];
   for (const e of sorted) {
-    const t = toMinOfDay(new Date(e.timestamp));
-    const et = e.eventType;
-    if (et === "Logon" && !prev) log.push({ t, kind: "in",    label: "Checked in",    detail: "Session started" });
-    else if (et === "Unlock")    log.push({ t, kind: "back",  label: "Unlocked",      detail: "Resumed activity" });
-    else if (et === "Resume")    log.push({ t, kind: "back",  label: "Woke from sleep", detail: "Device resumed" });
-    else if (et === "Lock")      log.push({ t, kind: "lunch", label: "Locked",        detail: "Screen locked" });
-    else if (et === "Sleep")     log.push({ t, kind: "lunch", label: "Sleep",         detail: "Device slept" });
-    else if (et === "Logoff")    log.push({ t, kind: "out",   label: "Checked out",   detail: "Session ended" });
-    prev = e;
+    const m = KIND_OF[e.eventType];
+    if (!m) continue;
+    const ts = new Date(e.timestamp);
+    const entry = { ts, t: toMinOfDay(ts), computer: e.computer, ...m };
+
+    // Dedupe: a single Windows logoff fires 4634 + 4647 + TerminalServices 23
+    // back-to-back (and similarly for some logons). Collapse same-kind entries
+    // on the same machine within 30s of the previous one — they're the same
+    // logical user action being reported by multiple event sources.
+    const prev = log[log.length - 1];
+    if (prev && prev.kind === entry.kind && prev.computer === entry.computer
+        && (entry.ts - prev.ts) <= 30_000) {
+      continue;
+    }
+    log.push(entry);
   }
+
   const dotFor = { in:"bg-active", back:"bg-active", lunch:"bg-lunch", idle:"bg-idle", out:"bg-offline" };
-  log.sort((a,b) => b.t - a.t); // newest first
+  log.sort((a,b) => b.ts - a.ts); // newest first
+
   const html = log.length ? log.map(e => `
     <div class="grid py-2 border-b border-[#f2ead6]" style="grid-template-columns: 72px 16px 1fr auto; gap:12px; align-items:center;">
       <div class="mono text-xs text-[#47372a]">${fmtHM(e.t)}</div>
       <div class="flex justify-center"><span class="dot ${dotFor[e.kind] || "bg-stale"}"></span></div>
-      <div class="text-[13px] font-medium">${escapeHtml(e.label)}</div>
+      <div class="min-w-0">
+        <div class="text-[13px] font-medium">${escapeHtml(e.label)}</div>
+        <div class="text-[11px] text-[#8a7a65] truncate">${escapeHtml(e.computer || "—")}</div>
+      </div>
       <div class="text-[11px] text-[#8a7a65]">${escapeHtml(e.detail)}</div>
     </div>`).join("")
     : `<div class="text-sm text-[#8a7a65] py-6">No events today.</div>`;

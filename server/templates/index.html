@@ -279,7 +279,12 @@ function buildSegments(events, dayDate) {
     if (e.extra) { try { extra = JSON.parse(e.extra); } catch {} }
     items.push({ min: toMinOfDay(dt), type: e.eventType, idle: e.idleSeconds, extra });
   }
-  items.sort((a,b) => a.min - b.min);
+  // Same-timestamp ordering matters: an Unlock and the trailing Logoff that
+  // closes the old session both arrive at the same instant. End-events have
+  // to be processed first so they close the previous segment, then the
+  // start-events open the new active segment cleanly.
+  const TIE_PRIORITY = { Logoff: 0, Lock: 1, Sleep: 1, Heartbeat: 2, Logon: 3, Unlock: 3, Resume: 3 };
+  items.sort((a,b) => a.min - b.min || (TIE_PRIORITY[a.type] ?? 5) - (TIE_PRIORITY[b.type] ?? 5));
 
   // Nothing to plot
   if (items.length === 0) return { segs: [], checkIn: null, checkOut: null };

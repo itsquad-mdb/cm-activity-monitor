@@ -141,6 +141,27 @@ function ConvertTo-IsoLogonTime {
     try { return ([datetime]::Parse($Raw)).ToString('o') } catch { return $null }
 }
 
+# Parse quser's IDLE TIME column into seconds. Per-session idle reported by
+# Windows itself, so this works correctly even when the collector is running
+# as SYSTEM (where Get-LastInputInfo would return nonsense — see Get-IdleSeconds).
+# quser formats observed:
+#   "."          → currently typing (0 seconds)
+#   "none"       → no idle reported
+#   "12"         → 12 minutes
+#   "1:23"       → 1h 23m
+#   "30+"        → 30+ days (cap at the day count)
+function ConvertTo-IdleSeconds {
+    param([string]$Raw)
+    if ($null -eq $Raw) { return $null }
+    $r = ($Raw -replace '\s', '').ToLower()
+    if ([string]::IsNullOrEmpty($r)) { return $null }
+    if ($r -eq '.' -or $r -eq 'none') { return 0 }
+    if ($r -match '^(\d+)\+$')        { return [int]$Matches[1] * 86400 }
+    if ($r -match '^(\d+):(\d+)$')    { return ([int]$Matches[1]) * 3600 + ([int]$Matches[2]) * 60 }
+    if ($r -match '^\d+$')            { return [int]$r * 60 }
+    return $null
+}
+
 # Resolve a SAM account name to its display/full name. Cached in state.json
 # between runs to keep the lookup off the hot path.
 function Get-UserDisplayName {
@@ -311,20 +332,27 @@ foreach ($e in $tsEvents) {
 # extra context the dashboard needs: display name, lock state, and the
 # session's own logon time (so check-in is reliable even when the 4624
 # Security event was missed / Security log unreadable).
-$idleNow   = Get-IdleSeconds
+#
+# Idle time MUST come from per-session sources, not Get-IdleSeconds. When the
+# script runs as SYSTEM (NinjaOne / scheduled task), Get-LastInputInfo can't
+# see input from other sessions and effectively returns system uptime — which
+# the dashboard would then paint as a giant idle block. quser's IDLE TIME
+# column is the right source: Windows tracks it per-session natively.
 $nowIso    = (Get-Date).ToString('o')
 $lockedMap = Get-SessionLockedMap
 foreach ($s in (Get-SessionSnapshot)) {
     if (Test-ExcludedUser $s.user) { continue }
     if ($s.state -notmatch '^(Active|Disc)') { continue }
     $sessionIdInt = 0; [void][int]::TryParse($s.sessionId, [ref]$sessionIdInt)
+    $sessionIdle = ConvertTo-IdleSeconds $s.idleTime
+    if ($null -eq $sessionIdle) { $sessionIdle = 0 }  # unparseable → assume active
     $allEvents += [pscustomobject]@{
         timestamp        = $nowIso
         source           = 'Snapshot'
         eventId          = 9000
         eventType        = 'Heartbeat'
         user             = $s.user
-        idleSeconds      = $idleNow
+        idleSeconds      = $sessionIdle
         sessionState     = $s.state
         sessionLocked    = [bool]$lockedMap[$sessionIdInt]
         sessionLogonTime = (ConvertTo-IsoLogonTime $s.logonTime)

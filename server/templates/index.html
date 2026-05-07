@@ -192,6 +192,10 @@
 const DAY_START_MIN = 8 * 60;       // 08:00
 const DAY_END_MIN   = 18 * 60 + 30; // 18:30
 const IDLE_THRESHOLD_SEC = 5 * 60;  // heartbeat idle > 5 min counts as idle
+const MAX_PLAUSIBLE_IDLE_SEC = 12 * 60 * 60;  // > 12h is a bogus reading from
+// the collector's Get-LastInputInfo when the script runs as SYSTEM (session 0
+// has no interactive user, so the call returns system uptime). Skip those —
+// don't let them flip the segment kind.
 
 const fmtMin = (m) => {
   if (m == null || m === 0) return "0h 00m";
@@ -308,7 +312,9 @@ function buildSegments(events, dayDate) {
     else if (it.type === "Logoff") { if (cur) { cur.end = it.min; segs.push(cur); cur = null; } }
     else if (it.type === "Heartbeat") {
       if (it.extra.sessionLocked === true) flip("locked", it.min);
-      else if ((it.idle || 0) > IDLE_THRESHOLD_SEC) flip("idle", it.min);
+      else if ((it.idle || 0) > MAX_PLAUSIBLE_IDLE_SEC) {
+        // Bogus idle reading — treat as a no-op (don't flip state).
+      } else if ((it.idle || 0) > IDLE_THRESHOLD_SEC) flip("idle", it.min);
       else flip("active", it.min);
     }
   }
